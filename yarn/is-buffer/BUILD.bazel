@@ -1,0 +1,115 @@
+# Generated file from yarn_install/npm_install rule.
+# See $(bazel info output_base)/external/build_bazel_rules_nodejs/internal/npm_install/generate_build_file.js
+
+# All rules in other repositories can use these targets
+package(default_visibility = ["//visibility:public"])
+
+load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
+
+# Generated targets for npm package "is-buffer"
+# {
+#   "name": "is-buffer",
+#   "description": "Determine if an object is a Buffer",
+#   "version": "2.0.4",
+#   "author": {
+#     "name": "Feross Aboukhadijeh",
+#     "email": "feross@feross.org",
+#     "url": "https://feross.org"
+#   },
+#   "bugs": {
+#     "url": "https://github.com/feross/is-buffer/issues"
+#   },
+#   "dependencies": {},
+#   "devDependencies": {
+#     "airtap": "^2.0.3",
+#     "standard": "*",
+#     "tape": "^4.11.0"
+#   },
+#   "engines": {
+#     "node": ">=4"
+#   },
+#   "keywords": [
+#     "arraybuffer",
+#     "browser",
+#     "browser buffer",
+#     "browserify",
+#     "buffer",
+#     "buffers",
+#     "core buffer",
+#     "dataview",
+#     "float32array",
+#     "float64array",
+#     "int16array",
+#     "int32array",
+#     "type",
+#     "typed array",
+#     "uint32array"
+#   ],
+#   "license": "MIT",
+#   "main": "index.js",
+#   "repository": {
+#     "type": "git",
+#     "url": "git://github.com/feross/is-buffer.git"
+#   },
+#   "scripts": {
+#     "test": "standard && npm run test-node && npm run test-browser",
+#     "test-browser": "airtap -- test/*.js",
+#     "test-browser-local": "airtap --local -- test/*.js",
+#     "test-node": "tape test/*.js"
+#   },
+#   "_dir": "is-buffer",
+#   "_name": "is-buffer",
+#   "_moduleName": "is-buffer",
+#   "_isNested": false,
+#   "_dependencies": [
+#     "is-buffer"
+#   ]
+# }
+
+filegroup(
+    name = "is-buffer__files",
+    # is-buffer package files (and files in nested node_modules)
+    srcs = [
+        "//:node_modules/is-buffer/LICENSE",
+        "//:node_modules/is-buffer/README.md",
+        "//:node_modules/is-buffer/index.d.ts",
+        "//:node_modules/is-buffer/index.js",
+        "//:node_modules/is-buffer/package.json",
+    ],
+)
+
+node_module_library(
+    name = "is-buffer",
+    # direct sources listed for strict deps support
+    srcs = [":is-buffer__files"],
+    # flattened list of direct and transitive dependencies hoisted to root by the package manager
+    deps = [
+        "//is-buffer:is-buffer__contents",
+    ],
+)
+
+# is-buffer__contents target is used as dep for main targets to prevent
+# circular dependencies errors
+node_module_library(
+    name = "is-buffer__contents",
+    srcs = [":is-buffer__files"],
+)
+
+# is-buffer__typings is the subset of is-buffer__contents that are declarations
+node_module_library(
+    name = "is-buffer__typings",
+    # is-buffer package declaration files (and declaration files in nested node_modules)
+    srcs = [
+        "//:node_modules/is-buffer/index.d.ts",
+    ],
+)
+
+load("@build_bazel_rules_nodejs//internal/npm_install:npm_umd_bundle.bzl", "npm_umd_bundle")
+
+npm_umd_bundle(
+    name = "is-buffer__umd",
+    package_name = "is-buffer",
+    entry_point = "//:node_modules/is-buffer/index.js",
+    package = ":is-buffer",
+)
+

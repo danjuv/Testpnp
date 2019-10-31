@@ -1,0 +1,141 @@
+# Generated file from yarn_install/npm_install rule.
+# See $(bazel info output_base)/external/build_bazel_rules_nodejs/internal/npm_install/generate_build_file.js
+
+# All rules in other repositories can use these targets
+package(default_visibility = ["//visibility:public"])
+
+load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
+
+# Generated targets for npm package "is-number"
+# {
+#   "name": "is-number",
+#   "description": "Returns true if a number or string value is a finite number. Useful for regex matches, parsing, user input, etc.",
+#   "version": "7.0.0",
+#   "homepage": "https://github.com/jonschlinkert/is-number",
+#   "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+#   "contributors": [
+#     "Jon Schlinkert (http://twitter.com/jonschlinkert)",
+#     "Olsten Larck (https://i.am.charlike.online)",
+#     "Rouven Weßling (www.rouvenwessling.de)"
+#   ],
+#   "repository": "jonschlinkert/is-number",
+#   "bugs": {
+#     "url": "https://github.com/jonschlinkert/is-number/issues"
+#   },
+#   "license": "MIT",
+#   "files": [
+#     "index.js"
+#   ],
+#   "main": "index.js",
+#   "engines": {
+#     "node": ">=0.12.0"
+#   },
+#   "scripts": {
+#     "test": "mocha"
+#   },
+#   "devDependencies": {
+#     "ansi": "^0.3.1",
+#     "benchmark": "^2.1.4",
+#     "gulp-format-md": "^1.0.0",
+#     "mocha": "^3.5.3"
+#   },
+#   "keywords": [
+#     "cast",
+#     "check",
+#     "coerce",
+#     "coercion",
+#     "finite",
+#     "integer",
+#     "is",
+#     "isnan",
+#     "is-nan",
+#     "is-num",
+#     "is-number",
+#     "isnumber",
+#     "isfinite",
+#     "istype",
+#     "kind",
+#     "math",
+#     "nan",
+#     "num",
+#     "number",
+#     "numeric",
+#     "parseFloat",
+#     "parseInt",
+#     "test",
+#     "type",
+#     "typeof",
+#     "value"
+#   ],
+#   "verb": {
+#     "toc": false,
+#     "layout": "default",
+#     "tasks": [
+#       "readme"
+#     ],
+#     "related": {
+#       "list": [
+#         "is-plain-object",
+#         "is-primitive",
+#         "isobject",
+#         "kind-of"
+#       ]
+#     },
+#     "plugins": [
+#       "gulp-format-md"
+#     ],
+#     "lint": {
+#       "reflinks": true
+#     }
+#   },
+#   "_dir": "is-number",
+#   "_name": "is-number",
+#   "_moduleName": "is-number",
+#   "_isNested": false,
+#   "_dependencies": [
+#     "is-number"
+#   ]
+# }
+
+filegroup(
+    name = "is-number__files",
+    # is-number package files (and files in nested node_modules)
+    srcs = [
+        "//:node_modules/is-number/LICENSE",
+        "//:node_modules/is-number/README.md",
+        "//:node_modules/is-number/index.js",
+        "//:node_modules/is-number/package.json",
+    ],
+)
+
+node_module_library(
+    name = "is-number",
+    # direct sources listed for strict deps support
+    srcs = [":is-number__files"],
+    # flattened list of direct and transitive dependencies hoisted to root by the package manager
+    deps = [
+        "//is-number:is-number__contents",
+    ],
+)
+
+# is-number__contents target is used as dep for main targets to prevent
+# circular dependencies errors
+node_module_library(
+    name = "is-number__contents",
+    srcs = [":is-number__files"],
+)
+
+# is-number__typings is the subset of is-number__contents that are declarations
+node_module_library(
+    name = "is-number__typings",
+)
+
+load("@build_bazel_rules_nodejs//internal/npm_install:npm_umd_bundle.bzl", "npm_umd_bundle")
+
+npm_umd_bundle(
+    name = "is-number__umd",
+    package_name = "is-number",
+    entry_point = "//:node_modules/is-number/index.js",
+    package = ":is-number",
+)
+
