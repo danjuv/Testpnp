@@ -14,6 +14,6 @@ nodejs_binary(
 nodejs_binary(
     name = "testpnp",
     entry_point = ":index.js",
-    data = ["@npm_pnp//:.pnp.js"],
-    args = ["-r $(execpath @npm_pnp//:.pnp.js)"],
+    data = ["@npm_pnp//:is-number"],
+    args = ["-r /Users/danju/work/testpnp/pnp/.pnp.js"]
 )

@@ -24,16 +24,11 @@ function writeFileSync(p, content) {
 function generateBuildFile(pkg) {
     const result = path.dirname(pnp.resolveRequest(pkg, "."));
     const contents = `
-  package(default_visibility = ["//visibility:public"])
-  new_local_repository(
-    name = "${pkg}",
-    path = "${result}",
-    build_file = "BUILD.isnumber",
-)
-  filegroup(
-    name = "is-number__files",
+package(default_visibility = ["//visibility:public"])
+filegroup(
+    name = "is-number",
     srcs = glob(["//${pkg}/*"]),
-  )
+)
   `;
     writeFileSync(`${pkg}/BUILD.bazel`, contents);
 }

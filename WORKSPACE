@@ -16,15 +16,9 @@ http_archive(
     urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.39.1/rules_nodejs-0.39.1.tar.gz"],
 )
 # 
-load("@build_bazel_rules_nodejs//:defs.bzl", "yarn_install")
+load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories","yarn_install")
 load("//nodejs:pnp_install.bzl", "pnp_install")
-# load("//tools/build/nodejs:download_yarn.bzl", "download_yarn")
-# load("//pnp:yarn_install.bzl", "yarn_install")
-# download_yarn(name = "downloaded_yarn")
-load("@build_bazel_rules_nodejs//internal/node:node_repositories.bzl", _node_repositories = "node_repositories")
-# load("@downloaded_yarn//:install_yarn.bzl", "install_yarn")
-# install_yarn()
-_node_repositories()
+node_repositories(preserve_symlinks=False,)
 yarn_install(
   name = "npm_yarn",
   package_json = "//pnp:package.json",

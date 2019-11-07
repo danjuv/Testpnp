@@ -13,9 +13,9 @@
    # If we had merely forked a child process here, we'd be responsible
    # for forwarding those OS interactions.
 -  exec "${node}" "${NODE_OPTIONS[@]}" "${MAIN}" "${ARGS[@]}"
-+  echo "${node}" "${NODE_OPTIONS[@]}" "${ARGS[@]}" TEMPLATED_script_path
++  echo "${node}" "${ARGS[@]}" "${NODE_OPTIONS[@]}" TEMPLATED_script_path 
 +  pwd
-+  exec "${node}" "${NODE_OPTIONS[@]}" "${ARGS[@]}" TEMPLATED_script_path 
++  exec "${node}" "${ARGS[@]}" "${NODE_OPTIONS[@]}" TEMPLATED_script_path 
    # exec terminates execution of this shell script, nothing later will run.
  fi
  
