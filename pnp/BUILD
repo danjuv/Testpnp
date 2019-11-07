@@ -10,8 +10,10 @@ nodejs_binary(
     data = ["@npm_yarn//is-number"],
     entry_point = ":index.js",
 )
+
 nodejs_binary(
     name = "testpnp",
     entry_point = ":index.js",
-    args = ["--node_options=--require /Users/danju/work/testpnp/bazel-testpnp/pnp/.pnp.js"],
+    data = ["@npm_pnp//:.pnp.js"],
+    args = ["-r $(execpath @npm_pnp//:.pnp.js)"],
 )

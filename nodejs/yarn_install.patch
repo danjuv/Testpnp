@@ -1,10 +1,21 @@
---- internal/npm_install/npm_install.bzl
-+++ internal/npm_install/npm_install.bzl
-@@ -21,6 +21,7 @@ as the package manager.
- See discussion in the README.
- """
+--- internal/node/node_launcher.sh
++++ internal/node/node_launcher.sh
+@@ -142,7 +142,6 @@ for ARG in "${ALL_ARGS[@]}"; do
+     --bazel_node_modules_manifest=*) MODULES_MANIFEST="${ARG#--bazel_node_modules_manifest=}" ;;
+     --nobazel_patch_module_resolver)
+       MAIN="TEMPLATED_script_path"
+-      NODE_OPTIONS+=( "--require" "$bazel_require_script" )
+       ;;
+     --node_options=*) NODE_OPTIONS+=( "${ARG#--node_options=}" ) ;;
+     *) ARGS+=( "$ARG" )
+@@ -164,7 +163,9 @@ if [ "${EXPECTED_EXIT_CODE}" -eq "0" ]; then
+   # handled by the node process.
+   # If we had merely forked a child process here, we'd be responsible
+   # for forwarding those OS interactions.
+-  exec "${node}" "${NODE_OPTIONS[@]}" "${MAIN}" "${ARGS[@]}"
++  echo "${node}" "${NODE_OPTIONS[@]}" "${ARGS[@]}" TEMPLATED_script_path
++  pwd
++  exec "${node}" "${NODE_OPTIONS[@]}" "${ARGS[@]}" TEMPLATED_script_path 
+   # exec terminates execution of this shell script, nothing later will run.
+ fi
  
-+
- load("//internal/common:check_bazel_version.bzl", "check_bazel_version")
- load("//internal/common:os_name.bzl", "is_windows_os")
- load("//internal/node:node_labels.bzl", "get_node_label", "get_npm_label", "get_yarn_label")
