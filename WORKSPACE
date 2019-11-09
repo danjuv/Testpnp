@@ -12,11 +12,17 @@ http_archive(
 http_archive(
     name = "build_bazel_rules_nodejs",
     sha256 = "3d7296d834208792fa3b2ded8ec04e75068e3de172fae79db217615bd75a6ff7",
-    patches = ["//nodejs:yarn_install.patch"],
+    # patches = ["//nodejs:yarn_install.patch"],
+    urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.39.1/rules_nodejs-0.39.1.tar.gz"],
+)
+http_archive(
+    name = "build_bazel_rules_nodejs_yarn",
+    sha256 = "3d7296d834208792fa3b2ded8ec04e75068e3de172fae79db217615bd75a6ff7",
     urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.39.1/rules_nodejs-0.39.1.tar.gz"],
 )
 # 
-load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories","yarn_install")
+load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories")
+load("@build_bazel_rules_nodejs_yarn//:defs.bzl", "yarn_install")
 load("//nodejs:pnp_install.bzl", "pnp_install")
 node_repositories(preserve_symlinks=False,)
 yarn_install(
@@ -31,3 +37,5 @@ pnp_install(
   yarn_lock = "//pnp:yarn.lock",
   symlink_node_modules = False,
 )
+load("@npm_pnp//:defs.bzl", "pinned_yarn_install")
+pinned_yarn_install()

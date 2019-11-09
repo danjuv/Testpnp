@@ -137,15 +137,6 @@ def _create_build_files(repository_ctx, rule_type, node, lock_file):
     repository_ctx.report_progress("Processing node_modules: installing Bazel packages and generating BUILD files")
     if repository_ctx.attr.manual_build_file_contents:
         repository_ctx.file("manual_build_file_contents", repository_ctx.attr.manual_build_file_contents)
-    # result = repository_ctx.execute([
-    #     node,
-    #     "generate_build_file.js",
-    #     repository_ctx.attr.name,
-    #     rule_type,
-    #     "1" if error_on_build_files else "0",
-    #     repository_ctx.path(lock_file),
-    #     ",".join(repository_ctx.attr.included_files),
-    # ])
     result = repository_ctx.execute([
         node,
         "generate_pnp_build_files.js",
@@ -158,12 +149,6 @@ def _add_scripts(repository_ctx):
     repository_ctx.template(
         "pre_process_package_json.js",
         repository_ctx.path(Label("@build_bazel_rules_nodejs//internal/npm_install:pre_process_package_json.js")),
-        {},
-    )
-
-    repository_ctx.template(
-        "generate_build_file.js",
-        repository_ctx.path(Label("@build_bazel_rules_nodejs//internal/npm_install:generate_build_file.js")),
         {},
     )
 
@@ -202,18 +187,18 @@ def _check_min_bazel_version(rule, repository_ctx):
             message = """
         A minimum Bazel version of 0.26.0 is required for the %s @%s repository rule.
 
-        By default, yarn_install and npm_install in build_bazel_rules_nodejs >= 0.30.0
+        By default, pnp_install and npm_install in build_bazel_rules_nodejs >= 0.30.0
         depends on the managed directory feature added in Bazel 0.26.0. See
         https://github.com/bazelbuild/rules_nodejs/wiki#migrating-to-rules_nodejs-030.
 
         You can opt out of this feature by setting `symlink_node_modules = False`
-        on all of your yarn_install & npm_install rules.
+        on all of your pnp_install & npm_install rules.
         """ % (rule, repository_ctx.attr.name),
             minimum_bazel_version = "0.26.0",
         )
 
-def _yarn_install_impl(repository_ctx):
-    """Core implementation of yarn pnp install."""
+def _pnp_install_impl(repository_ctx):
+    """Core implementation of pnp install."""
     
     node = repository_ctx.path(get_node_label(repository_ctx))
     yarn = get_yarn_label(repository_ctx)
@@ -240,6 +225,7 @@ def _yarn_install_impl(repository_ctx):
     args = [
         repository_ctx.path(yarn),
         "--cwd",
+        "--pnp",
         root,
         "--network-timeout",
         str(repository_ctx.attr.network_timeout * 1000),  # in ms
@@ -261,16 +247,16 @@ def _yarn_install_impl(repository_ctx):
         # artifacts somewhere, so we rely on yarn to be correct.
         args.extend(["--mutex", "network"])
 
-    repository_ctx.report_progress("Running yarn install on %s" % repository_ctx.attr.package_json)
+    repository_ctx.report_progress("Running PNP install on %s" % repository_ctx.attr.package_json)
     result = repository_ctx.execute(
         args,
         timeout = repository_ctx.attr.timeout,
         quiet = repository_ctx.attr.quiet,
     )
     if result.return_code:
-        fail("yarn_install failed: %s (%s)" % (result.stdout, result.stderr))
+        fail("pnp_install failed: %s (%s)" % (result.stdout, result.stderr))
 
-    _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
+    _create_build_files(repository_ctx, "pnp_install", node, repository_ctx.attr.yarn_lock)
 
 pnp_install = repository_rule(
     attrs = dict(COMMON_ATTRIBUTES, **{
@@ -309,5 +295,5 @@ cache_directory.
         ),
     }),
     doc = "Runs yarn install during workspace setup.",
-    implementation = _yarn_install_impl,
+    implementation = _pnp_install_impl,
 )

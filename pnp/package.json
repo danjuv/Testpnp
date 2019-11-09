@@ -5,7 +5,8 @@
   "license": "MIT",
   "dependencies": {
     "is-buffer": "^2.0.4",
-    "is-number": "^7.0.0"
+    "is-number": "^7.0.0",
+    "nock": "^10.0.6"
   },
   "devDependencies": {},
   "installConfig": {

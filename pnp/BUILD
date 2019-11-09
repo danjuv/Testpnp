@@ -7,13 +7,20 @@ exports_files([
 
 nodejs_binary(
     name = "testyarn",
-    data = ["@npm_yarn//is-number"],
+    data = [
+        "@npm_yarn//is-number",
+        "@npm_yarn//is-buffer",
+        "@npm_yarn//nock"
+    ],
     entry_point = ":index.js",
 )
 
 nodejs_binary(
     name = "testpnp",
     entry_point = ":index.js",
-    data = ["@npm_pnp//:is-number"],
+    data = [
+        "@npm_pnp//is-number",
+        "@npm_pnp//is-buffer"
+    ],
     args = ["-r /Users/danju/work/testpnp/pnp/.pnp.js"]
 )
