@@ -12,7 +12,7 @@ http_archive(
 http_archive(
     name = "build_bazel_rules_nodejs",
     sha256 = "3d7296d834208792fa3b2ded8ec04e75068e3de172fae79db217615bd75a6ff7",
-    # patches = ["//nodejs:yarn_install.patch"],
+    patches = ["//nodejs:yarn_install.patch"],
     urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.39.1/rules_nodejs-0.39.1.tar.gz"],
 )
 http_archive(

@@ -61,7 +61,7 @@ function generateBuildFile(pkg: string) {
 
 
 async function main() {
-  const pkgs = ["is-number", "is-buffer", "nock"];
+  const pkgs = ["nock"];
   
   const contents = `package(default_visibility = ["//visibility:public"])
 exports_files([

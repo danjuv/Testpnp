@@ -225,7 +225,6 @@ def _pnp_install_impl(repository_ctx):
     args = [
         repository_ctx.path(yarn),
         "--cwd",
-        "--pnp",
         root,
         "--network-timeout",
         str(repository_ctx.attr.network_timeout * 1000),  # in ms
