@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-let defsBzl  = `def pinned_yarn_install():\n`
+let defsBzl = `def pinned_yarn_install():\n`;
 
 function mkdirp(p: string) {
   if (!fs.existsSync(p)) {
@@ -14,55 +14,60 @@ function writeFileSync(p: string, content: string) {
   fs.writeFileSync(p, content);
 }
 
-function generatePackageBuildFile(pkg: string, workspacePkg: string) {
-  return `package(default_visibility = ["//visibility:public"])
-  load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
-  node_module_library(
-    name = "${pkg}",
-    # direct sources listed for strict deps support
-    srcs = [":${pkg}__files"],
-    # flattened list of direct and transitive dependencies hoisted to root by the package manager
-    deps = [
-        "//${pkg}:${pkg}__files",
-    ],
-  )
-  filegroup(
-    name = "${pkg}__files",
-    srcs = ["@${workspacePkg}//:index.js"]
-  )  
-    `;
-}
+function generateBuildFiles(pkg: string) {
 
-function generateLocalRepository(path: string, pkg: string, workspacePkg: string) {
-  const bzlContents = `  native.new_local_repository(
-    name = "${workspacePkg}",
-    path = "${path}",
-    build_file_content = """package(default_visibility = ["//visibility:public"])
+  const result = path.dirname(pnp.resolveRequest(pkg, "."));
+
+  const deps = Object.keys(
+    require(path.join(result, "package.json")).dependencies || {}
+  );
+  const workspacePkg = pkg.replace("-", "_");
+
+  function addPackageToDefs(pkg: string) {
+    stream.write(`  native.new_local_repository(
+      name = "${pkg.replace(/-/g,"_")}",
+      path = "${result}",
+      build_file_content = """package(default_visibility = ["//visibility:public"])
 filegroup(
   name = "${pkg}_files",
-  srcs = glob(["*"]),
+  srcs = glob(["*"])
 )
 """,
-)\n`
+  )\n`);
+  }
+  [pkg].concat(deps).forEach(addPackageToDefs)
 
-return bzlContents;
-}
+  const depsStr = deps.reduce((total, curr) => {
+    total += `\"${curr}__files\",\n`
+    return total;
+  }, `\"${pkg}__files\",\n`)
 
-function generateBuildFile(pkg: string) {
-  const result = path.dirname(pnp.resolveRequest(pkg, "."));
-  const workspacePkg = pkg.replace("-", "_")
-  const contents = generatePackageBuildFile(pkg, workspacePkg)
+  const contents = `package(default_visibility = ["//visibility:public"])
+load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
+node_module_library(
+  name = "${pkg}",
+  # direct sources listed for strict deps support
+  srcs = [":${pkg}__files"],
+  # flattened list of direct and transitive dependencies hoisted to root by the package manager
+  deps = [
+      ${depsStr}
+  ],
+)
+filegroup(
+  name = "${pkg}__files",
+  srcs = ["@${workspacePkg}//:index.js"]
+)  
+  `;
+
   writeFileSync(`${pkg}/BUILD.bazel`, contents);
 
-  const bzlContents = generateLocalRepository(result, pkg, workspacePkg)
-
-  defsBzl += bzlContents
 }
 
-
 async function main() {
-  const pkgs = ["nock"];
-  
+  stream = fs.createWriteStream("./defs.bzl")
+  stream.write("def pinned_yarn_install():\n")
+  const deps = Object.keys(require("./package.json").dependencies);
+
   const contents = `package(default_visibility = ["//visibility:public"])
 exports_files([
   ".pnp.js",
@@ -70,11 +75,11 @@ exports_files([
 ])
     `;
   writeFileSync(`BUILD.bazel`, contents);
-  // const packageJson = require("package.json")
-  pkgs.forEach(pkg => generateBuildFile(pkg))
-  writeFileSync(`defs.bzl`, defsBzl)
-}
 
+  deps.forEach(dep => generateBuildFiles(dep));
+  stream.close();
+}
+let stream: fs.WriteStream
 const pnpFile = "./.pnp.js";
 const pnp = require(pnpFile);
 main();
