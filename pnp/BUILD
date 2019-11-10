@@ -20,7 +20,8 @@ nodejs_binary(
     entry_point = ":index.js",
     data = [
         "@npm_pnp//is-number",
-        "@npm_pnp//is-buffer"
+        "@npm_pnp//is-buffer",
+        "@npm_pnp//nock"
     ],
     args = ["-r /Users/danju/work/testpnp/pnp/.pnp.js"]
 )

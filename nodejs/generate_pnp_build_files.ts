@@ -1,7 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 
-let defsBzl = `def pinned_yarn_install():\n`;
+let stream: fs.WriteStream;
+const pnpFile = "./.pnp.js";
+const pnp = require(pnpFile);
 
 function mkdirp(p: string) {
   if (!fs.existsSync(p)) {
@@ -9,13 +11,13 @@ function mkdirp(p: string) {
     fs.mkdirSync(p);
   }
 }
+
 function writeFileSync(p: string, content: string) {
   mkdirp(path.dirname(p));
   fs.writeFileSync(p, content);
 }
 
 function generateBuildFiles(pkg: string) {
-
   const result = path.dirname(pnp.resolveRequest(pkg, "."));
 
   const deps = Object.keys(
@@ -25,7 +27,7 @@ function generateBuildFiles(pkg: string) {
 
   function addPackageToDefs(pkg: string) {
     stream.write(`  native.new_local_repository(
-      name = "${pkg.replace(/-/g,"_")}",
+      name = "${pkg.replace(/-/g, "_")}",
       path = "${result}",
       build_file_content = """package(default_visibility = ["//visibility:public"])
 filegroup(
@@ -35,14 +37,19 @@ filegroup(
 """,
   )\n`);
   }
-  [pkg].concat(deps).forEach(addPackageToDefs)
 
-  const depsStr = deps.reduce((total, curr) => {
-    total += `\"${curr}__files\",\n`
-    return total;
-  }, `\"${pkg}__files\",\n`)
+  [pkg].concat(deps).forEach(dep => {
+    addPackageToDefs(dep);
+    createBuildFile(dep);
+  });
 
-  const contents = `package(default_visibility = ["//visibility:public"])
+  function createBuildFile(pkg: string) {
+    const depsStr = deps.reduce((total, curr) => {
+      total += `\"//${curr}:${curr}__files\",\n`;
+      return total;
+    }, "");
+
+    const contents = `package(default_visibility = ["//visibility:public"])
 load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
 node_module_library(
   name = "${pkg}",
@@ -55,17 +62,18 @@ node_module_library(
 )
 filegroup(
   name = "${pkg}__files",
-  srcs = ["@${workspacePkg}//:index.js"]
-)  
-  `;
+  srcs = ["@${pkg.replace(/-/g, "_")}//:index.js"]
+)  `;
 
-  writeFileSync(`${pkg}/BUILD.bazel`, contents);
+    writeFileSync(`${pkg}/BUILD.bazel`, contents);
+  }
 
+  createBuildFile(pkg);
 }
 
 async function main() {
-  stream = fs.createWriteStream("./defs.bzl")
-  stream.write("def pinned_yarn_install():\n")
+  stream = fs.createWriteStream("./defs.bzl");
+  stream.write("def pinned_yarn_install():\n");
   const deps = Object.keys(require("./package.json").dependencies);
 
   const contents = `package(default_visibility = ["//visibility:public"])
@@ -79,7 +87,5 @@ exports_files([
   deps.forEach(dep => generateBuildFiles(dep));
   stream.close();
 }
-let stream: fs.WriteStream
-const pnpFile = "./.pnp.js";
-const pnp = require(pnpFile);
+
 main();

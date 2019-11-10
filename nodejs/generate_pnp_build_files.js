@@ -9,7 +9,9 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-let defsBzl = `def pinned_yarn_install():\n`;
+let stream;
+const pnpFile = "./.pnp.js";
+const pnp = require(pnpFile);
 function mkdirp(p) {
     if (!fs.existsSync(p)) {
         mkdirp(path.dirname(p));
@@ -23,7 +25,6 @@ function writeFileSync(p, content) {
 function generateBuildFiles(pkg) {
     const result = path.dirname(pnp.resolveRequest(pkg, "."));
     const deps = Object.keys(require(path.join(result, "package.json")).dependencies || {});
-    let bzlContents;
     const workspacePkg = pkg.replace("-", "_");
     function addPackageToDefs(pkg) {
         stream.write(`  native.new_local_repository(
@@ -37,12 +38,16 @@ filegroup(
 """,
   )\n`);
     }
-    [pkg].concat(deps).forEach(addPackageToDefs);
-    const depsStr = deps.reduce((total, curr) => {
-        total += `\"${curr}__files\",\n`;
-        return total;
-    }, `\"${pkg}__files\",\n`);
-    const contents = `package(default_visibility = ["//visibility:public"])
+    [pkg].concat(deps).forEach(dep => {
+        addPackageToDefs(dep);
+        createBuildFile(dep);
+    });
+    function createBuildFile(pkg) {
+        const depsStr = deps.reduce((total, curr) => {
+            total += `\"//${curr}:${curr}__files\",\n`;
+            return total;
+        }, "");
+        const contents = `package(default_visibility = ["//visibility:public"])
 load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
 node_module_library(
   name = "${pkg}",
@@ -55,10 +60,11 @@ node_module_library(
 )
 filegroup(
   name = "${pkg}__files",
-  srcs = ["@${workspacePkg}//:index.js"]
-)  
-  `;
-    writeFileSync(`${pkg}/BUILD.bazel`, contents);
+  srcs = ["@${pkg.replace(/-/g, "_")}//:index.js"]
+)  `;
+        writeFileSync(`${pkg}/BUILD.bazel`, contents);
+    }
+    createBuildFile(pkg);
 }
 async function main() {
     stream = fs.createWriteStream("./defs.bzl");
@@ -74,7 +80,4 @@ exports_files([
     deps.forEach(dep => generateBuildFiles(dep));
     stream.close();
 }
-let stream;
-const pnpFile = "./.pnp.js";
-const pnp = require(pnpFile);
 main();
