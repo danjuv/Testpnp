@@ -90,16 +90,308 @@ function blacklistCheck(locator) {
 }
 
 let packageInformationStores = new Map([
+  ["is-buffer", new Map([
+    ["2.0.4", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-buffer-2.0.4-3e572f23c8411a5cfd9557c849e3665e0b290623-integrity/node_modules/is-buffer/"),
+      packageDependencies: new Map([
+        ["is-buffer", "2.0.4"],
+      ]),
+    }],
+  ])],
+  ["is-number", new Map([
+    ["7.0.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-number-7.0.0-7535345b896734d5f80c4d06c50955527a14f12b-integrity/node_modules/is-number/"),
+      packageDependencies: new Map([
+        ["is-number", "7.0.0"],
+      ]),
+    }],
+  ])],
+  ["nock", new Map([
+    ["10.0.6", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-nock-10.0.6-e6d90ee7a68b8cfc2ab7f6127e7d99aa7d13d111-integrity/node_modules/nock/"),
+      packageDependencies: new Map([
+        ["chai", "4.2.0"],
+        ["debug", "4.1.1"],
+        ["deep-equal", "1.1.0"],
+        ["json-stringify-safe", "5.0.1"],
+        ["lodash", "4.17.15"],
+        ["mkdirp", "0.5.1"],
+        ["propagate", "1.0.0"],
+        ["qs", "6.9.0"],
+        ["semver", "5.7.1"],
+        ["nock", "10.0.6"],
+      ]),
+    }],
+  ])],
+  ["chai", new Map([
+    ["4.2.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-chai-4.2.0-760aa72cf20e3795e84b12877ce0e83737aa29e5-integrity/node_modules/chai/"),
+      packageDependencies: new Map([
+        ["assertion-error", "1.1.0"],
+        ["check-error", "1.0.2"],
+        ["deep-eql", "3.0.1"],
+        ["get-func-name", "2.0.0"],
+        ["pathval", "1.1.0"],
+        ["type-detect", "4.0.8"],
+        ["chai", "4.2.0"],
+      ]),
+    }],
+  ])],
+  ["assertion-error", new Map([
+    ["1.1.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-assertion-error-1.1.0-e60b6b0e8f301bd97e5375215bda406c85118c0b-integrity/node_modules/assertion-error/"),
+      packageDependencies: new Map([
+        ["assertion-error", "1.1.0"],
+      ]),
+    }],
+  ])],
+  ["check-error", new Map([
+    ["1.0.2", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-check-error-1.0.2-574d312edd88bb5dd8912e9286dd6c0aed4aac82-integrity/node_modules/check-error/"),
+      packageDependencies: new Map([
+        ["check-error", "1.0.2"],
+      ]),
+    }],
+  ])],
+  ["deep-eql", new Map([
+    ["3.0.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-deep-eql-3.0.1-dfc9404400ad1c8fe023e7da1df1c147c4b444df-integrity/node_modules/deep-eql/"),
+      packageDependencies: new Map([
+        ["type-detect", "4.0.8"],
+        ["deep-eql", "3.0.1"],
+      ]),
+    }],
+  ])],
+  ["type-detect", new Map([
+    ["4.0.8", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-type-detect-4.0.8-7646fb5f18871cfbb7749e69bd39a6388eb7450c-integrity/node_modules/type-detect/"),
+      packageDependencies: new Map([
+        ["type-detect", "4.0.8"],
+      ]),
+    }],
+  ])],
+  ["get-func-name", new Map([
+    ["2.0.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-get-func-name-2.0.0-ead774abee72e20409433a066366023dd6887a41-integrity/node_modules/get-func-name/"),
+      packageDependencies: new Map([
+        ["get-func-name", "2.0.0"],
+      ]),
+    }],
+  ])],
+  ["pathval", new Map([
+    ["1.1.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-pathval-1.1.0-b942e6d4bde653005ef6b71361def8727d0645e0-integrity/node_modules/pathval/"),
+      packageDependencies: new Map([
+        ["pathval", "1.1.0"],
+      ]),
+    }],
+  ])],
+  ["debug", new Map([
+    ["4.1.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-debug-4.1.1-3b72260255109c6b589cee050f1d516139664791-integrity/node_modules/debug/"),
+      packageDependencies: new Map([
+        ["ms", "2.1.2"],
+        ["debug", "4.1.1"],
+      ]),
+    }],
+  ])],
+  ["ms", new Map([
+    ["2.1.2", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-ms-2.1.2-d09d1f357b443f493382a8eb3ccd183872ae6009-integrity/node_modules/ms/"),
+      packageDependencies: new Map([
+        ["ms", "2.1.2"],
+      ]),
+    }],
+  ])],
+  ["deep-equal", new Map([
+    ["1.1.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-deep-equal-1.1.0-3103cdf8ab6d32cf4a8df7865458f2b8d33f3745-integrity/node_modules/deep-equal/"),
+      packageDependencies: new Map([
+        ["is-arguments", "1.0.4"],
+        ["is-date-object", "1.0.1"],
+        ["is-regex", "1.0.4"],
+        ["object-is", "1.0.1"],
+        ["object-keys", "1.1.1"],
+        ["regexp.prototype.flags", "1.2.0"],
+        ["deep-equal", "1.1.0"],
+      ]),
+    }],
+  ])],
+  ["is-arguments", new Map([
+    ["1.0.4", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-arguments-1.0.4-3faf966c7cba0ff437fb31f6250082fcf0448cf3-integrity/node_modules/is-arguments/"),
+      packageDependencies: new Map([
+        ["is-arguments", "1.0.4"],
+      ]),
+    }],
+  ])],
+  ["is-date-object", new Map([
+    ["1.0.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-date-object-1.0.1-9aa20eb6aeebbff77fbd33e74ca01b33581d3a16-integrity/node_modules/is-date-object/"),
+      packageDependencies: new Map([
+        ["is-date-object", "1.0.1"],
+      ]),
+    }],
+  ])],
+  ["is-regex", new Map([
+    ["1.0.4", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-regex-1.0.4-5517489b547091b0930e095654ced25ee97e9491-integrity/node_modules/is-regex/"),
+      packageDependencies: new Map([
+        ["has", "1.0.3"],
+        ["is-regex", "1.0.4"],
+      ]),
+    }],
+  ])],
+  ["has", new Map([
+    ["1.0.3", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-has-1.0.3-722d7cbfc1f6aa8241f16dd814e011e1f41e8796-integrity/node_modules/has/"),
+      packageDependencies: new Map([
+        ["function-bind", "1.1.1"],
+        ["has", "1.0.3"],
+      ]),
+    }],
+  ])],
+  ["function-bind", new Map([
+    ["1.1.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-function-bind-1.1.1-a56899d3ea3c9bab874bb9773b7c5ede92f4895d-integrity/node_modules/function-bind/"),
+      packageDependencies: new Map([
+        ["function-bind", "1.1.1"],
+      ]),
+    }],
+  ])],
+  ["object-is", new Map([
+    ["1.0.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-object-is-1.0.1-0aa60ec9989a0b3ed795cf4d06f62cf1ad6539b6-integrity/node_modules/object-is/"),
+      packageDependencies: new Map([
+        ["object-is", "1.0.1"],
+      ]),
+    }],
+  ])],
+  ["object-keys", new Map([
+    ["1.1.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-object-keys-1.1.1-1c47f272df277f3b1daf061677d9c82e2322c60e-integrity/node_modules/object-keys/"),
+      packageDependencies: new Map([
+        ["object-keys", "1.1.1"],
+      ]),
+    }],
+  ])],
+  ["regexp.prototype.flags", new Map([
+    ["1.2.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-regexp-prototype-flags-1.2.0-6b30724e306a27833eeb171b66ac8890ba37e41c-integrity/node_modules/regexp.prototype.flags/"),
+      packageDependencies: new Map([
+        ["define-properties", "1.1.3"],
+        ["regexp.prototype.flags", "1.2.0"],
+      ]),
+    }],
+  ])],
+  ["define-properties", new Map([
+    ["1.1.3", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-define-properties-1.1.3-cf88da6cbee26fe6db7094f61d870cbd84cee9f1-integrity/node_modules/define-properties/"),
+      packageDependencies: new Map([
+        ["object-keys", "1.1.1"],
+        ["define-properties", "1.1.3"],
+      ]),
+    }],
+  ])],
+  ["json-stringify-safe", new Map([
+    ["5.0.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-json-stringify-safe-5.0.1-1296a2d58fd45f19a0f6ce01d65701e2c735b6eb-integrity/node_modules/json-stringify-safe/"),
+      packageDependencies: new Map([
+        ["json-stringify-safe", "5.0.1"],
+      ]),
+    }],
+  ])],
+  ["lodash", new Map([
+    ["4.17.15", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-lodash-4.17.15-b447f6670a0455bbfeedd11392eff330ea097548-integrity/node_modules/lodash/"),
+      packageDependencies: new Map([
+        ["lodash", "4.17.15"],
+      ]),
+    }],
+  ])],
+  ["mkdirp", new Map([
+    ["0.5.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-mkdirp-0.5.1-30057438eac6cf7f8c4767f38648d6697d75c903-integrity/node_modules/mkdirp/"),
+      packageDependencies: new Map([
+        ["minimist", "0.0.8"],
+        ["mkdirp", "0.5.1"],
+      ]),
+    }],
+  ])],
+  ["minimist", new Map([
+    ["0.0.8", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-minimist-0.0.8-857fcabfc3397d2625b8228262e86aa7a011b05d-integrity/node_modules/minimist/"),
+      packageDependencies: new Map([
+        ["minimist", "0.0.8"],
+      ]),
+    }],
+  ])],
+  ["propagate", new Map([
+    ["1.0.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-propagate-1.0.0-00c2daeedda20e87e3782b344adba1cddd6ad709-integrity/node_modules/propagate/"),
+      packageDependencies: new Map([
+        ["propagate", "1.0.0"],
+      ]),
+    }],
+  ])],
+  ["qs", new Map([
+    ["6.9.0", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-qs-6.9.0-d1297e2a049c53119cb49cca366adbbacc80b409-integrity/node_modules/qs/"),
+      packageDependencies: new Map([
+        ["qs", "6.9.0"],
+      ]),
+    }],
+  ])],
+  ["semver", new Map([
+    ["5.7.1", {
+      packageLocation: path.resolve(__dirname, "../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-semver-5.7.1-a954f931aeba508d307bbf069eff0c01c96116f7-integrity/node_modules/semver/"),
+      packageDependencies: new Map([
+        ["semver", "5.7.1"],
+      ]),
+    }],
+  ])],
   [null, new Map([
     [null, {
       packageLocation: path.resolve(__dirname, "./"),
       packageDependencies: new Map([
+        ["is-buffer", "2.0.4"],
+        ["is-number", "7.0.0"],
+        ["nock", "10.0.6"],
       ]),
     }],
   ])],
 ]);
 
 let locatorsByLocations = new Map([
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-buffer-2.0.4-3e572f23c8411a5cfd9557c849e3665e0b290623-integrity/node_modules/is-buffer/", {"name":"is-buffer","reference":"2.0.4"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-number-7.0.0-7535345b896734d5f80c4d06c50955527a14f12b-integrity/node_modules/is-number/", {"name":"is-number","reference":"7.0.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-nock-10.0.6-e6d90ee7a68b8cfc2ab7f6127e7d99aa7d13d111-integrity/node_modules/nock/", {"name":"nock","reference":"10.0.6"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-chai-4.2.0-760aa72cf20e3795e84b12877ce0e83737aa29e5-integrity/node_modules/chai/", {"name":"chai","reference":"4.2.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-assertion-error-1.1.0-e60b6b0e8f301bd97e5375215bda406c85118c0b-integrity/node_modules/assertion-error/", {"name":"assertion-error","reference":"1.1.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-check-error-1.0.2-574d312edd88bb5dd8912e9286dd6c0aed4aac82-integrity/node_modules/check-error/", {"name":"check-error","reference":"1.0.2"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-deep-eql-3.0.1-dfc9404400ad1c8fe023e7da1df1c147c4b444df-integrity/node_modules/deep-eql/", {"name":"deep-eql","reference":"3.0.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-type-detect-4.0.8-7646fb5f18871cfbb7749e69bd39a6388eb7450c-integrity/node_modules/type-detect/", {"name":"type-detect","reference":"4.0.8"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-get-func-name-2.0.0-ead774abee72e20409433a066366023dd6887a41-integrity/node_modules/get-func-name/", {"name":"get-func-name","reference":"2.0.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-pathval-1.1.0-b942e6d4bde653005ef6b71361def8727d0645e0-integrity/node_modules/pathval/", {"name":"pathval","reference":"1.1.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-debug-4.1.1-3b72260255109c6b589cee050f1d516139664791-integrity/node_modules/debug/", {"name":"debug","reference":"4.1.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-ms-2.1.2-d09d1f357b443f493382a8eb3ccd183872ae6009-integrity/node_modules/ms/", {"name":"ms","reference":"2.1.2"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-deep-equal-1.1.0-3103cdf8ab6d32cf4a8df7865458f2b8d33f3745-integrity/node_modules/deep-equal/", {"name":"deep-equal","reference":"1.1.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-arguments-1.0.4-3faf966c7cba0ff437fb31f6250082fcf0448cf3-integrity/node_modules/is-arguments/", {"name":"is-arguments","reference":"1.0.4"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-date-object-1.0.1-9aa20eb6aeebbff77fbd33e74ca01b33581d3a16-integrity/node_modules/is-date-object/", {"name":"is-date-object","reference":"1.0.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-is-regex-1.0.4-5517489b547091b0930e095654ced25ee97e9491-integrity/node_modules/is-regex/", {"name":"is-regex","reference":"1.0.4"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-has-1.0.3-722d7cbfc1f6aa8241f16dd814e011e1f41e8796-integrity/node_modules/has/", {"name":"has","reference":"1.0.3"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-function-bind-1.1.1-a56899d3ea3c9bab874bb9773b7c5ede92f4895d-integrity/node_modules/function-bind/", {"name":"function-bind","reference":"1.1.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-object-is-1.0.1-0aa60ec9989a0b3ed795cf4d06f62cf1ad6539b6-integrity/node_modules/object-is/", {"name":"object-is","reference":"1.0.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-object-keys-1.1.1-1c47f272df277f3b1daf061677d9c82e2322c60e-integrity/node_modules/object-keys/", {"name":"object-keys","reference":"1.1.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-regexp-prototype-flags-1.2.0-6b30724e306a27833eeb171b66ac8890ba37e41c-integrity/node_modules/regexp.prototype.flags/", {"name":"regexp.prototype.flags","reference":"1.2.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-define-properties-1.1.3-cf88da6cbee26fe6db7094f61d870cbd84cee9f1-integrity/node_modules/define-properties/", {"name":"define-properties","reference":"1.1.3"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-json-stringify-safe-5.0.1-1296a2d58fd45f19a0f6ce01d65701e2c735b6eb-integrity/node_modules/json-stringify-safe/", {"name":"json-stringify-safe","reference":"5.0.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-lodash-4.17.15-b447f6670a0455bbfeedd11392eff330ea097548-integrity/node_modules/lodash/", {"name":"lodash","reference":"4.17.15"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-mkdirp-0.5.1-30057438eac6cf7f8c4767f38648d6697d75c903-integrity/node_modules/mkdirp/", {"name":"mkdirp","reference":"0.5.1"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-minimist-0.0.8-857fcabfc3397d2625b8228262e86aa7a011b05d-integrity/node_modules/minimist/", {"name":"minimist","reference":"0.0.8"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-propagate-1.0.0-00c2daeedda20e87e3782b344adba1cddd6ad709-integrity/node_modules/propagate/", {"name":"propagate","reference":"1.0.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-qs-6.9.0-d1297e2a049c53119cb49cca366adbbacc80b409-integrity/node_modules/qs/", {"name":"qs","reference":"6.9.0"}],
+  ["../../../../../../../Users/danju/Library/Caches/Yarn/v6/npm-semver-5.7.1-a954f931aeba508d307bbf069eff0c01c96116f7-integrity/node_modules/semver/", {"name":"semver","reference":"5.7.1"}],
   ["./", topLevelLocator],
 ]);
 exports.findPackageLocator = function findPackageLocator(location) {
@@ -112,6 +404,78 @@ exports.findPackageLocator = function findPackageLocator(location) {
     relativeLocation = `${relativeLocation}/`;
 
   let match;
+
+  if (relativeLocation.length >= 176 && relativeLocation[175] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 176)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 170 && relativeLocation[169] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 170)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 166 && relativeLocation[165] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 166)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 162 && relativeLocation[161] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 162)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 160 && relativeLocation[159] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 160)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 158 && relativeLocation[157] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 158)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 156 && relativeLocation[155] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 156)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 154 && relativeLocation[153] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 154)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 152 && relativeLocation[151] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 152)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 150 && relativeLocation[149] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 150)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 148 && relativeLocation[147] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 148)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 146 && relativeLocation[145] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 146)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 144 && relativeLocation[143] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 144)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 142 && relativeLocation[141] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 142)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 141 && relativeLocation[140] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 141)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 140 && relativeLocation[139] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 140)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 138 && relativeLocation[137] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 138)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 136 && relativeLocation[135] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 136)))
+      return blacklistCheck(match);
 
   if (relativeLocation.length >= 2 && relativeLocation[1] === '/')
     if (match = locatorsByLocations.get(relativeLocation.substr(0, 2)))

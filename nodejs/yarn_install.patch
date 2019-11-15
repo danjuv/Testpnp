@@ -1,6 +1,51 @@
+diff --git internal/node/node.bzl internal/node/node.bzl
+index dba72ae..d76b6a6 100644
+--- internal/node/node.bzl
++++ internal/node/node.bzl
+@@ -230,6 +230,7 @@ def _nodejs_binary_impl(ctx):
+         "TEMPLATED_repository_args": _to_manifest_path(ctx, ctx.file._repository_args),
+         "TEMPLATED_script_path": _to_execroot_path(ctx, ctx.file.entry_point),
+         "TEMPLATED_vendored_node": "" if is_builtin else strip_external(ctx.file._node.path),
++        "TEMPLATED_pnp_file": _to_manifest_path(ctx, ctx.file.pnp_file),
+     }
+     ctx.actions.expand_template(
+         template = ctx.file._launcher_template,
+@@ -501,7 +502,12 @@ _NODEJS_EXECUTABLE_OUTPUTS = {
+ # and duplicate the definitions to give two distinct symbols.
+ nodejs_binary = rule(
+     implementation = _nodejs_binary_impl,
+-    attrs = _NODEJS_EXECUTABLE_ATTRS,
++    attrs = dict(_NODEJS_EXECUTABLE_ATTRS, **{
++        "pnp_file": attr.label(
++            mandatory = False,
++            allow_single_file = True,
++            ),
++        }),
+     doc = "Runs some JavaScript code in NodeJS.",
+     executable = True,
+     outputs = _NODEJS_EXECUTABLE_OUTPUTS,
+diff --git internal/node/node_launcher.sh internal/node/node_launcher.sh
+index 7272a62..7be7578 100644
 --- internal/node/node_launcher.sh
 +++ internal/node/node_launcher.sh
-@@ -142,7 +142,6 @@ for ARG in "${ALL_ARGS[@]}"; do
+@@ -162,7 +162,7 @@ readonly repository_args=$(rlocation "TEMPLATED_repository_args")
+ MAIN=$(rlocation "TEMPLATED_loader_path")
+ readonly link_modules_script=$(rlocation "TEMPLATED_link_modules_script")
+ bazel_require_script=$(rlocation "TEMPLATED_bazel_require_script")
+-
++pnp_file=$(rlocation "TEMPLATED_pnp_file")
+ # Node's --require option assumes that a non-absolute path not starting with `.` is
+ # a module, so that you can do --require=source-map-support/register
+ # So if the require script is not absolute, we must make it so
+@@ -178,14 +178,13 @@ esac
+ source $repository_args
+ 
+ ARGS=()
+-NODE_OPTIONS=()
++NODE_OPTIONS=("--require" "${pnp_file}")
+ ALL_ARGS=(TEMPLATED_args $NODE_REPOSITORY_ARGS "$@")
+ for ARG in "${ALL_ARGS[@]}"; do
+   case "$ARG" in
      --bazel_node_modules_manifest=*) MODULES_MANIFEST="${ARG#--bazel_node_modules_manifest=}" ;;
      --nobazel_patch_module_resolver)
        MAIN="TEMPLATED_script_path"
@@ -8,14 +53,12 @@
        ;;
      --node_options=*) NODE_OPTIONS+=( "${ARG#--node_options=}" ) ;;
      *) ARGS+=( "$ARG" )
-@@ -164,7 +163,9 @@ if [ "${EXPECTED_EXIT_CODE}" -eq "0" ]; then
+@@ -207,7 +206,7 @@ if [ "${EXPECTED_EXIT_CODE}" -eq "0" ]; then
    # handled by the node process.
    # If we had merely forked a child process here, we'd be responsible
    # for forwarding those OS interactions.
 -  exec "${node}" "${NODE_OPTIONS[@]}" "${MAIN}" "${ARGS[@]}"
-+  echo "${node}" "${ARGS[@]}" "${NODE_OPTIONS[@]}" TEMPLATED_script_path 
-+  pwd
-+  exec "${node}" "${ARGS[@]}" "${NODE_OPTIONS[@]}" TEMPLATED_script_path 
++  exec "${node}" "${ARGS[@]}" "${NODE_OPTIONS[@]}" "$(pwd)/TEMPLATED_script_path"
    # exec terminates execution of this shell script, nothing later will run.
  fi
  

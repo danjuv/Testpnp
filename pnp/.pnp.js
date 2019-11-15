@@ -6,9 +6,10 @@
 // Used for the resolveUnqualified part of the resolution (ie resolving folder/index.js & file extensions)
 // Deconstructed so that they aren't affected by any fs monkeypatching occuring later during the execution
 const {statSync, lstatSync, readlinkSync, readFileSync, existsSync, realpathSync} = require('fs');
-
 const Module = require('module');
 const path = require('path');
+console.log("test", path.resolve(__dirname, "../../../Library/Caches/Yarn/v4/npm-lodash-4.17.15-b447f6670a0455bbfeedd11392eff330ea097548/node_modules/lodash/"));
+console.log("testing", __dirname);
 const StringDecoder = require('string_decoder');
 
 const ignorePattern = null ? new RegExp(null) : null;
@@ -395,6 +396,7 @@ let locatorsByLocations = new Map([
   ["./", topLevelLocator],
 ]);
 exports.findPackageLocator = function findPackageLocator(location) {
+  console.log("location", location)
   let relativeLocation = normalizePath(path.relative(__dirname, location));
 
   if (!relativeLocation.match(isStrictRegExp))
@@ -404,7 +406,7 @@ exports.findPackageLocator = function findPackageLocator(location) {
     relativeLocation = `${relativeLocation}/`;
 
   let match;
-
+  console.log("relativeLocation", relativeLocation)
   if (relativeLocation.length >= 142 && relativeLocation[141] === '/')
     if (match = locatorsByLocations.get(relativeLocation.substr(0, 142)))
       return blacklistCheck(match);
@@ -481,7 +483,7 @@ exports.findPackageLocator = function findPackageLocator(location) {
     if (match = locatorsByLocations.get(relativeLocation.substr(0, 2)))
       return blacklistCheck(match);
 
-  return null;
+  return blacklistCheck(topLevelLocator);
 };
 
 
@@ -1077,8 +1079,7 @@ exports.setup = function setup() {
     }
 
     if (!issuers) {
-      const issuerModule = getIssuerModule(parent);
-      const issuer = issuerModule ? issuerModule.filename : `${process.cwd()}/`;
+      const issuer = `${process.cwd()}/`;
 
       issuers = [issuer];
     }

@@ -21,7 +21,8 @@ nodejs_binary(
     data = [
         "@npm_pnp//is-number",
         "@npm_pnp//is-buffer",
-        "@npm_pnp//nock"
+        "@npm_pnp//nock",
+        "@npm_pnp//:.pnp.js"
     ],
-    args = ["-r /Users/danju/work/testpnp/pnp/.pnp.js"]
+    pnp_file = "@npm_pnp//:.pnp.js"
 )

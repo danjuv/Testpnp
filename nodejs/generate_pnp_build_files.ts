@@ -1,8 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
+import * as lockfile from '@yarnpkg/lockfile';
 
 let stream: fs.WriteStream;
 const pnpFile = "./.pnp.js";
+const yarnLockPath = "./yarn.lock"
+
+
 const pnp = require(pnpFile);
 
 function mkdirp(p: string) {
@@ -38,13 +42,13 @@ filegroup(
   )\n`);
   }
 
-  [pkg].concat(deps).forEach(dep => {
+  [pkg].concat([]).forEach(dep => {
     addPackageToDefs(dep);
     createBuildFile(dep);
   });
 
   function createBuildFile(pkg: string) {
-    const depsStr = deps.reduce((total, curr) => {
+    const depsStr = [pkg].reduce((total, curr) => {
       total += `\"//${curr}:${curr}__files\",\n`;
       return total;
     }, "");

@@ -22,8 +22,7 @@ See discussion in the README.
 """
 
 load("@build_bazel_rules_nodejs//internal/common:check_bazel_version.bzl", "check_bazel_version")
-load("@build_bazel_rules_nodejs//internal/common:os_name.bzl", "is_windows_os")
-load("@build_bazel_rules_nodejs//internal/node:node_labels.bzl", "get_node_label", "get_npm_label", "get_yarn_label")
+load("@build_bazel_rules_nodejs//internal/node:node_labels.bzl", "get_node_label", "get_yarn_label")
 
 COMMON_ATTRIBUTES = dict(dict(), **{
     "always_hide_bazel_files": attr.bool(
@@ -131,6 +130,15 @@ data attribute.
     ),
 })
 
+def _process_pnp_file(repository_ctx, node):
+    repository_ctx.report_progress("Processing PNP file: Patching module directory")
+    result = repository_ctx.execute([
+        node,
+        "process_pnp_file.js"
+    ])
+    if result.return_code:
+        fail("generate_build_file.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+
 def _create_build_files(repository_ctx, rule_type, node, lock_file):
     error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
 
@@ -155,6 +163,10 @@ def _add_scripts(repository_ctx):
     repository_ctx.template(
         "generate_pnp_build_files.js",
         repository_ctx.path(Label("//nodejs:generate_pnp_build_files.js"))
+    )
+    repository_ctx.template(
+        "process_pnp_file.js",
+        repository_ctx.path(Label("//nodejs:process_pnp_file.js"))
     )
 
 def _add_package_json(repository_ctx):
@@ -206,6 +218,7 @@ def _pnp_install_impl(repository_ctx):
     # run the package manager in the root of the external repository
     root = repository_ctx.path("")
 
+
     repository_ctx.symlink(
         repository_ctx.attr.yarn_lock,
         repository_ctx.path("yarn.lock"),
@@ -219,8 +232,10 @@ def _pnp_install_impl(repository_ctx):
         [node, "pre_process_package_json.js", repository_ctx.path(repository_ctx.attr.package_json), "yarn"],
         quiet = repository_ctx.attr.quiet,
     )
+
     if result.return_code:
         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+
 
     args = [
         repository_ctx.path(yarn),
@@ -255,6 +270,7 @@ def _pnp_install_impl(repository_ctx):
     if result.return_code:
         fail("pnp_install failed: %s (%s)" % (result.stdout, result.stderr))
 
+    _process_pnp_file(repository_ctx, node);
     _create_build_files(repository_ctx, "pnp_install", node, repository_ctx.attr.yarn_lock)
 
 pnp_install = repository_rule(
