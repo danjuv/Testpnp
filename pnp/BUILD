@@ -10,7 +10,7 @@ nodejs_binary(
     data = [
         "@npm_yarn//is-number",
         "@npm_yarn//is-buffer",
-        "@npm_yarn//nock"
+        "@npm_yarn//nock",
     ],
     entry_point = ":index.js",
 )
@@ -22,6 +22,7 @@ nodejs_binary(
         "@npm_pnp//is-number",
         "@npm_pnp//is-buffer",
         "@npm_pnp//nock",
+        "@npm_pnp//closure-compiler",
         "@npm_pnp//:.pnp.js"
     ],
     pnp_file = "@npm_pnp//:.pnp.js"

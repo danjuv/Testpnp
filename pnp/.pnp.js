@@ -6,10 +6,9 @@
 // Used for the resolveUnqualified part of the resolution (ie resolving folder/index.js & file extensions)
 // Deconstructed so that they aren't affected by any fs monkeypatching occuring later during the execution
 const {statSync, lstatSync, readlinkSync, readFileSync, existsSync, realpathSync} = require('fs');
+
 const Module = require('module');
 const path = require('path');
-console.log("test", path.resolve(__dirname, "../../../Library/Caches/Yarn/v4/npm-lodash-4.17.15-b447f6670a0455bbfeedd11392eff330ea097548/node_modules/lodash/"));
-console.log("testing", __dirname);
 const StringDecoder = require('string_decoder');
 
 const ignorePattern = null ? new RegExp(null) : null;
@@ -351,6 +350,23 @@ let packageInformationStores = new Map([
       ]),
     }],
   ])],
+  ["closure-compiler", new Map([
+    ["0.2.12", {
+      packageLocation: path.resolve(__dirname, "../../../Library/Caches/Yarn/v4/npm-closure-compiler-0.2.12-6c3087cad12742c79e47f0ce50e87af91cf8e171/node_modules/closure-compiler/"),
+      packageDependencies: new Map([
+        ["google-closure-compiler", "20150901.0.0"],
+        ["closure-compiler", "0.2.12"],
+      ]),
+    }],
+  ])],
+  ["google-closure-compiler", new Map([
+    ["20150901.0.0", {
+      packageLocation: path.resolve(__dirname, "../../../Library/Caches/Yarn/v4/npm-google-closure-compiler-20150901.0.0-3d01c6cade65790a9bfb4e30b2158b7635acbade/node_modules/google-closure-compiler/"),
+      packageDependencies: new Map([
+        ["google-closure-compiler", "20150901.0.0"],
+      ]),
+    }],
+  ])],
   [null, new Map([
     [null, {
       packageLocation: path.resolve(__dirname, "./"),
@@ -358,6 +374,7 @@ let packageInformationStores = new Map([
         ["is-buffer", "2.0.4"],
         ["is-number", "7.0.0"],
         ["nock", "10.0.6"],
+        ["closure-compiler", "0.2.12"],
       ]),
     }],
   ])],
@@ -393,10 +410,11 @@ let locatorsByLocations = new Map([
   ["../../../Library/Caches/Yarn/v4/npm-propagate-1.0.0-00c2daeedda20e87e3782b344adba1cddd6ad709/node_modules/propagate/", {"name":"propagate","reference":"1.0.0"}],
   ["../../../Library/Caches/Yarn/v4/npm-qs-6.9.0-d1297e2a049c53119cb49cca366adbbacc80b409/node_modules/qs/", {"name":"qs","reference":"6.9.0"}],
   ["../../../Library/Caches/Yarn/v4/npm-semver-5.7.1-a954f931aeba508d307bbf069eff0c01c96116f7/node_modules/semver/", {"name":"semver","reference":"5.7.1"}],
+  ["../../../Library/Caches/Yarn/v4/npm-closure-compiler-0.2.12-6c3087cad12742c79e47f0ce50e87af91cf8e171/node_modules/closure-compiler/", {"name":"closure-compiler","reference":"0.2.12"}],
+  ["../../../Library/Caches/Yarn/v4/npm-google-closure-compiler-20150901.0.0-3d01c6cade65790a9bfb4e30b2158b7635acbade/node_modules/google-closure-compiler/", {"name":"google-closure-compiler","reference":"20150901.0.0"}],
   ["./", topLevelLocator],
 ]);
 exports.findPackageLocator = function findPackageLocator(location) {
-  console.log("location", location)
   let relativeLocation = normalizePath(path.relative(__dirname, location));
 
   if (!relativeLocation.match(isStrictRegExp))
@@ -406,7 +424,11 @@ exports.findPackageLocator = function findPackageLocator(location) {
     relativeLocation = `${relativeLocation}/`;
 
   let match;
-  console.log("relativeLocation", relativeLocation)
+
+  if (relativeLocation.length >= 151 && relativeLocation[150] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 151)))
+      return blacklistCheck(match);
+
   if (relativeLocation.length >= 142 && relativeLocation[141] === '/')
     if (match = locatorsByLocations.get(relativeLocation.substr(0, 142)))
       return blacklistCheck(match);
@@ -417,6 +439,10 @@ exports.findPackageLocator = function findPackageLocator(location) {
 
   if (relativeLocation.length >= 132 && relativeLocation[131] === '/')
     if (match = locatorsByLocations.get(relativeLocation.substr(0, 132)))
+      return blacklistCheck(match);
+
+  if (relativeLocation.length >= 131 && relativeLocation[130] === '/')
+    if (match = locatorsByLocations.get(relativeLocation.substr(0, 131)))
       return blacklistCheck(match);
 
   if (relativeLocation.length >= 128 && relativeLocation[127] === '/')
@@ -483,7 +509,7 @@ exports.findPackageLocator = function findPackageLocator(location) {
     if (match = locatorsByLocations.get(relativeLocation.substr(0, 2)))
       return blacklistCheck(match);
 
-  return blacklistCheck(topLevelLocator);
+  return null;
 };
 
 
@@ -1079,7 +1105,8 @@ exports.setup = function setup() {
     }
 
     if (!issuers) {
-      const issuer = `${process.cwd()}/`;
+      const issuerModule = getIssuerModule(parent);
+      const issuer = issuerModule ? issuerModule.filename : `${process.cwd()}/`;
 
       issuers = [issuer];
     }

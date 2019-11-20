@@ -20,9 +20,9 @@ as the package manager.
 
 See discussion in the README.
 """
-
 load("@build_bazel_rules_nodejs//internal/common:check_bazel_version.bzl", "check_bazel_version")
-load("@build_bazel_rules_nodejs//internal/node:node_labels.bzl", "get_node_label", "get_yarn_label")
+load("@build_bazel_rules_nodejs//internal/node:node_labels.bzl", "get_node_label", "get_npm_label", "get_yarn_label")
+load("@build_bazel_rules_nodejs//internal/common:os_name.bzl", "is_windows_os")
 
 COMMON_ATTRIBUTES = dict(dict(), **{
     "always_hide_bazel_files": attr.bool(
@@ -130,16 +130,21 @@ data attribute.
     ),
 })
 
-def _process_pnp_file(repository_ctx, node):
+YARN_ENVIRONMENT = [
+
+]
+
+def _process_pnp_file(repository_ctx, node,workspace_path):
     repository_ctx.report_progress("Processing PNP file: Patching module directory")
     result = repository_ctx.execute([
         node,
-        "process_pnp_file.js"
+        "process_pnp_file.js",
+       workspace_path
     ])
     if result.return_code:
         fail("generate_build_file.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
 
-def _create_build_files(repository_ctx, rule_type, node, lock_file):
+def _create_build_files(repository_ctx, rule_type, node,workspace_path):
     error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
 
     repository_ctx.report_progress("Processing node_modules: installing Bazel packages and generating BUILD files")
@@ -148,6 +153,7 @@ def _create_build_files(repository_ctx, rule_type, node, lock_file):
     result = repository_ctx.execute([
         node,
         "generate_pnp_build_files.js",
+       workspace_path
     ]) 
     repository_ctx.report_progress("Running yarn install on")
     if result.return_code:
@@ -172,7 +178,7 @@ def _add_scripts(repository_ctx):
 def _add_package_json(repository_ctx):
     repository_ctx.symlink(
         repository_ctx.attr.package_json,
-        repository_ctx.path("package.json"),
+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
     )
 
 def _add_data_dependencies(repository_ctx):
@@ -199,32 +205,150 @@ def _check_min_bazel_version(rule, repository_ctx):
             message = """
         A minimum Bazel version of 0.26.0 is required for the %s @%s repository rule.
 
-        By default, pnp_install and npm_install in build_bazel_rules_nodejs >= 0.30.0
+        By default, yarn_install and npm_install in build_bazel_rules_nodejs >= 0.30.0
         depends on the managed directory feature added in Bazel 0.26.0. See
         https://github.com/bazelbuild/rules_nodejs/wiki#migrating-to-rules_nodejs-030.
 
         You can opt out of this feature by setting `symlink_node_modules = False`
-        on all of your pnp_install & npm_install rules.
+        on all of your yarn_install & npm_install rules.
         """ % (rule, repository_ctx.attr.name),
             minimum_bazel_version = "0.26.0",
         )
 
-def _pnp_install_impl(repository_ctx):
-    """Core implementation of pnp install."""
-    
+def _npm_install_impl(repository_ctx):
+    """Core implementation of npm_install."""
+
+    _check_min_bazel_version("npm_install", repository_ctx)
+
+    is_windows_host = is_windows_os(repository_ctx)
+    node = repository_ctx.path(get_node_label(repository_ctx))
+    npm = get_npm_label(repository_ctx)
+    npm_args = ["install"]
+
+    if repository_ctx.attr.prod_only:
+        npm_args.append("--production")
+
+    # If symlink_node_modules is true then run the package manager
+    # in the package.json folder; otherwise, run it in the root of
+    # the external repository
+    if repository_ctx.attr.symlink_node_modules:
+        root = repository_ctx.path(repository_ctx.attr.package_json).dirname
+    else:
+        root = repository_ctx.path("")
+
+    # The entry points for npm install for osx/linux and windows
+    if not is_windows_host:
+        repository_ctx.file(
+            "npm",
+            content = """#!/usr/bin/env bash
+# Immediately exit if any command fails.
+set -e
+(cd "{root}"; "{npm}" {npm_args})
+""".format(
+                root = root,
+                npm = repository_ctx.path(npm),
+                npm_args = " ".join(npm_args),
+            ),
+            executable = True,
+        )
+    else:
+        repository_ctx.file(
+            "npm.cmd",
+            content = """@echo off
+cd "{root}" && "{npm}" {npm_args}
+""".format(
+                root = root,
+                npm = repository_ctx.path(npm),
+                npm_args = " ".join(npm_args),
+            ),
+            executable = True,
+        )
+
+    if not repository_ctx.attr.symlink_node_modules:
+        repository_ctx.symlink(
+            repository_ctx.attr.package_lock_json,
+            repository_ctx.path("package-lock.json"),
+        )
+        _add_package_json(repository_ctx)
+        _add_data_dependencies(repository_ctx)
+
+    _add_scripts(repository_ctx)
+
+    result = repository_ctx.execute(
+        [node, "pre_process_package_json.js", repository_ctx.path(repository_ctx.attr.package_json), "npm"],
+        quiet = repository_ctx.attr.quiet,
+    )
+    if result.return_code:
+        fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+
+    repository_ctx.report_progress("Running npm install on %s" % repository_ctx.attr.package_json)
+    result = repository_ctx.execute(
+        [repository_ctx.path("npm.cmd" if is_windows_host else "npm")],
+        timeout = repository_ctx.attr.timeout,
+        quiet = repository_ctx.attr.quiet,
+    )
+
+    if result.return_code:
+        fail("npm_install failed: %s (%s)" % (result.stdout, result.stderr))
+
+    remove_npm_absolute_paths = Label("//third_party/github.com/juanjoDiaz/removeNPMAbsolutePaths:bin/removeNPMAbsolutePaths")
+
+    # removeNPMAbsolutePaths is run on node_modules after npm install as the package.json files
+    # generated by npm are non-deterministic. They contain absolute install paths and other private
+    # information fields starting with "_". removeNPMAbsolutePaths removes all fields starting with "_".
+    result = repository_ctx.execute(
+        [node, repository_ctx.path(remove_npm_absolute_paths), "/".join([str(root), "node_modules"])],
+    )
+
+    if result.return_code:
+        fail("remove_npm_absolute_paths failed: %s (%s)" % (result.stdout, result.stderr))
+
+    if repository_ctx.attr.symlink_node_modules:
+        _symlink_node_modules(repository_ctx)
+
+   
+    _process_pnp_file(repository_ctx, node, root + "/.pnp.js");
+    _create_build_files(repository_ctx, "pnp_install", node, root + "/.pnp.js")
+
+npm_install = repository_rule(
+    attrs = dict(COMMON_ATTRIBUTES, **{
+        "timeout": attr.int(
+            default = 3600,
+            doc = """Maximum duration of the command "npm install" in seconds
+            (default is 3600 seconds).""",
+        ),
+        "package_lock_json": attr.label(
+            mandatory = True,
+            allow_single_file = True,
+        ),
+    }),
+    doc = "Runs npm install during workspace setup.",
+    implementation = _npm_install_impl,
+)
+
+def _yarn_install_impl(repository_ctx):
+    """Core implementation of yarn_install."""
+
+    _check_min_bazel_version("yarn_install", repository_ctx)
+
     node = repository_ctx.path(get_node_label(repository_ctx))
     yarn = get_yarn_label(repository_ctx)
 
-    # run the package manager in the root of the external repository
-    root = repository_ctx.path("")
+    # If symlink_node_modules is true then run the package manager
+    # in the package.json folder; otherwise, run it in the root of
+    # the external repository
+    if repository_ctx.attr.symlink_node_modules:
+        root = repository_ctx.path(repository_ctx.attr.package_json).dirname
+    else:
+        root = repository_ctx.path(repository_ctx.attr.package_json.package)
 
-
-    repository_ctx.symlink(
-        repository_ctx.attr.yarn_lock,
-        repository_ctx.path("yarn.lock"),
-    )
-    _add_package_json(repository_ctx)
-    _add_data_dependencies(repository_ctx)
+    if not repository_ctx.attr.symlink_node_modules:
+        repository_ctx.symlink(
+            repository_ctx.attr.yarn_lock,
+            repository_ctx.path(repository_ctx.attr.yarn_lock.package + "/yarn.lock"),
+        )
+        _add_package_json(repository_ctx)
+        _add_data_dependencies(repository_ctx)
 
     _add_scripts(repository_ctx)
 
@@ -232,10 +356,26 @@ def _pnp_install_impl(repository_ctx):
         [node, "pre_process_package_json.js", repository_ctx.path(repository_ctx.attr.package_json), "yarn"],
         quiet = repository_ctx.attr.quiet,
     )
-
     if result.return_code:
         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
-
+    result = repository_ctx.execute([
+        "sed",
+        "-i",
+        "-e",
+        "/^ *\"preinstall\".*$/d",
+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
+    ])
+    if result.return_code:
+        fail("deleting preinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+    result = repository_ctx.execute([
+        "sed",
+        "-i",
+        "-e",
+        "/^ *\"postinstall\".*$/d",
+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
+    ])
+    if result.return_code:
+        fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
 
     args = [
         repository_ctx.path(yarn),
@@ -243,6 +383,8 @@ def _pnp_install_impl(repository_ctx):
         root,
         "--network-timeout",
         str(repository_ctx.attr.network_timeout * 1000),  # in ms
+        "--modules-folder",
+        repository_ctx.path("node_modules"),
     ]
 
     if repository_ctx.attr.frozen_lockfile:
@@ -261,17 +403,21 @@ def _pnp_install_impl(repository_ctx):
         # artifacts somewhere, so we rely on yarn to be correct.
         args.extend(["--mutex", "network"])
 
-    repository_ctx.report_progress("Running PNP install on %s" % repository_ctx.attr.package_json)
+    repository_ctx.report_progress("Running yarn install on %s" % repository_ctx.attr.package_json)
     result = repository_ctx.execute(
         args,
+        environment = {k: repository_ctx.os.environ[k] for k in YARN_ENVIRONMENT},
         timeout = repository_ctx.attr.timeout,
         quiet = repository_ctx.attr.quiet,
     )
     if result.return_code:
-        fail("pnp_install failed: %s (%s)" % (result.stdout, result.stderr))
+        fail("yarn_install failed: %s (%s)" % (result.stdout, result.stderr))
 
-    _process_pnp_file(repository_ctx, node);
-    _create_build_files(repository_ctx, "pnp_install", node, repository_ctx.attr.yarn_lock)
+    if repository_ctx.attr.symlink_node_modules:
+        _symlink_node_modules(repository_ctx)
+    print(repository_ctx.path(root.basename))
+    _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
+    _create_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
 
 pnp_install = repository_rule(
     attrs = dict(COMMON_ATTRIBUTES, **{
@@ -310,5 +456,6 @@ cache_directory.
         ),
     }),
     doc = "Runs yarn install during workspace setup.",
-    implementation = _pnp_install_impl,
+    implementation = _yarn_install_impl,
+    environ = YARN_ENVIRONMENT,
 )
