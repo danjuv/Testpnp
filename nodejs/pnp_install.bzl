@@ -415,7 +415,6 @@ def _yarn_install_impl(repository_ctx):
 
     if repository_ctx.attr.symlink_node_modules:
         _symlink_node_modules(repository_ctx)
-    print(repository_ctx.path(root.basename))
     _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
     _create_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
 
