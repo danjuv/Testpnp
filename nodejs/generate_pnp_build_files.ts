@@ -1,4 +1,4 @@
-import { promises as fsp, existsSync, mkdirSync } from "fs";
+import { promises as fsp } from "fs";
 import * as path from "path";
 
 async function writeFile(p: string, content: string) {

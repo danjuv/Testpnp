@@ -1,0 +1,2818 @@
+diff --git internal/node/node.bzl internal/node/node.bzl
+index 2ffe835..2add202 100644
+--- internal/node/node.bzl
++++ internal/node/node.bzl
+@@ -200,7 +200,7 @@ def _nodejs_binary_impl(ctx):
+     node_tool_files.append(ctx.file._bazel_require_script)
+ 
+     if not ctx.outputs.templated_args_file:
+-        templated_args = ctx.attr.templated_args
++        templated_args = [a for a in ctx.attr.templated_args]
+     else:
+         # Distribute the templated_args between the params file and the node options
+         params = []
+@@ -225,7 +225,10 @@ def _nodejs_binary_impl(ctx):
+         node_tool_files.append(ctx.outputs.templated_args_file)
+ 
+     is_builtin = ctx.attr._node.label.workspace_name in ["nodejs_%s" % p for p in BUILT_IN_NODE_PLATFORMS]
+-
++    output_files = [ctx.outputs.loader]
++    if ctx.file.pnp_file:
++        templated_args.append("--pnp")
++        output_files.append(ctx.file.pnp_file)
+     substitutions = {
+         "TEMPLATED_args": " ".join([
+             expand_location_into_runfiles(ctx, a)
+@@ -239,6 +242,7 @@ def _nodejs_binary_impl(ctx):
+         "TEMPLATED_repository_args": _to_manifest_path(ctx, ctx.file._repository_args),
+         "TEMPLATED_script_path": _to_execroot_path(ctx, ctx.file.entry_point),
+         "TEMPLATED_vendored_node": "" if is_builtin else strip_external(ctx.file._node.path),
++        "TEMPLATED_pnp_file": _to_manifest_path(ctx, ctx.file.pnp_file) if ctx.file.pnp_file else "",
+     }
+     ctx.actions.expand_template(
+         template = ctx.file._launcher_template,
+@@ -257,16 +261,14 @@ def _nodejs_binary_impl(ctx):
+ 
+     # entry point is only needed in runfiles if it is a .js file
+     if ctx.file.entry_point.extension == "js":
+-        runfiles = depset([ctx.file.entry_point], transitive = [runfiles])
++        runfiles = depset([ctx.file.entry_point], transitive = [runfiles]) 
+ 
+     return [
+         DefaultInfo(
+             executable = executable,
+             runfiles = ctx.runfiles(
+                 transitive_files = runfiles,
+-                files = node_tool_files + [
+-                            ctx.outputs.loader,
+-                        ] + ctx.files._source_map_support_files +
++                files = node_tool_files + output_files + ctx.files._source_map_support_files +
+ 
+                         # We need this call to the list of Files.
+                         # Calling the .to_list() method may have some perfs hits,
+@@ -511,7 +513,12 @@ _NODEJS_EXECUTABLE_OUTPUTS = {
+ # and duplicate the definitions to give two distinct symbols.
+ nodejs_binary = rule(
+     implementation = _nodejs_binary_impl,
+-    attrs = _NODEJS_EXECUTABLE_ATTRS,
++    attrs = dict(_NODEJS_EXECUTABLE_ATTRS, **{
++        "pnp_file": attr.label(
++            mandatory = False,
++            allow_single_file = True,
++            ),
++        }),
+     doc = "Runs some JavaScript code in NodeJS.",
+     executable = True,
+     outputs = _NODEJS_EXECUTABLE_OUTPUTS,
+diff --git internal/node/node_launcher.sh internal/node/node_launcher.sh
+index 7272a62..dbd4bae 100644
+--- internal/node/node_launcher.sh
++++ internal/node/node_launcher.sh
+@@ -162,7 +162,7 @@ readonly repository_args=$(rlocation "TEMPLATED_repository_args")
+ MAIN=$(rlocation "TEMPLATED_loader_path")
+ readonly link_modules_script=$(rlocation "TEMPLATED_link_modules_script")
+ bazel_require_script=$(rlocation "TEMPLATED_bazel_require_script")
+-
++pnp_file=$(rlocation "TEMPLATED_pnp_file")
+ # Node's --require option assumes that a non-absolute path not starting with `.` is
+ # a module, so that you can do --require=source-map-support/register
+ # So if the require script is not absolute, we must make it so
+@@ -188,6 +188,10 @@ for ARG in "${ALL_ARGS[@]}"; do
+       NODE_OPTIONS+=( "--require" "$bazel_require_script" )
+       ;;
+     --node_options=*) NODE_OPTIONS+=( "${ARG#--node_options=}" ) ;;
++    --pnp)
++      MAIN="TEMPLATED_script_path"
++      NODE_OPTIONS+=("--require" "${pnp_file}")
++      ;;
+     *) ARGS+=( "$ARG" )
+   esac
+ done
+diff --git internal/npm_install/generate_pnp_build_files.js internal/npm_install/generate_pnp_build_files.js
+new file mode 100644
+index 0000000..d036135
+--- /dev/null
++++ internal/npm_install/generate_pnp_build_files.js
+@@ -0,0 +1,45 @@
++"use strict";
++var __importStar = (this && this.__importStar) || function (mod) {
++    if (mod && mod.__esModule) return mod;
++    var result = {};
++    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
++    result["default"] = mod;
++    return result;
++};
++Object.defineProperty(exports, "__esModule", { value: true });
++const fs_1 = require("fs");
++const path = __importStar(require("path"));
++async function writeFile(p, content) {
++    await fs_1.promises.mkdir(path.dirname(p), { recursive: true });
++    return fs_1.promises.writeFile(p, content);
++}
++function createBuildFile(packagePath) {
++    const contents = `package(default_visibility = ["//visibility:public"])
++load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
++
++filegroup(
++    name = "${packagePath}",
++    srcs = [] # we dont care about the actual content, we want a list of dependencies to modify the pnp file around
++)
++`;
++    return writeFile(`${packagePath}/BUILD.bazel`, contents);
++}
++async function main(workspacePath) {
++    const contents = `package(default_visibility = ["//visibility:public"])
++exports_files([
++    ".pnp.js",
++    "package.json",
++])`;
++    const packageJson = require(path.join(workspacePath, "package.json"));
++    await Promise.all([
++        "dependencies",
++        "devDependencies",
++        "peerDependencies",
++        "optionalDependencies"
++    ].map(d => {
++        return Promise.all(Object.keys(packageJson[d] || {})
++            .map(createBuildFile)
++            .concat([writeFile("BUILD.bazel", contents)]));
++    }));
++}
++main(process.argv[2]);
+diff --git internal/npm_install/generate_pnp_build_files.ts internal/npm_install/generate_pnp_build_files.ts
+new file mode 100644
+index 0000000..13d494a
+--- /dev/null
++++ internal/npm_install/generate_pnp_build_files.ts
+@@ -0,0 +1,45 @@
++import { promises as fsp } from "fs";
++import * as path from "path";
++
++async function writeFile(p: string, content: string) {
++  await fsp.mkdir(path.dirname(p), {recursive: true})
++  return fsp.writeFile(p, content);
++}
++
++function createBuildFile(packagePath: string) {
++  const contents = `package(default_visibility = ["//visibility:public"])
++load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
++
++filegroup(
++    name = "${packagePath}",
++    srcs = [] # we dont care about the actual content, we want a list of dependencies to modify the pnp file around
++)
++`;
++
++  return writeFile(`${packagePath}/BUILD.bazel`, contents);
++}
++
++async function main(workspacePath: string) {
++  const contents = `package(default_visibility = ["//visibility:public"])
++exports_files([
++    ".pnp.js",
++    "package.json",
++])`;
++  const packageJson = require(path.join(workspacePath, "package.json"));
++  await Promise.all(
++    [
++      "dependencies",
++      "devDependencies",
++      "peerDependencies",
++      "optionalDependencies"
++    ].map(d => {
++      return Promise.all(
++        Object.keys(packageJson[d] || {})
++          .map(createBuildFile)
++          .concat([writeFile("BUILD.bazel", contents)])
++      );
++    })
++  );
++}
++
++main(process.argv[2]);
+diff --git internal/npm_install/npm_install.bzl internal/npm_install/npm_install.bzl
+index 9fe884d..57b0452 100644
+--- internal/npm_install/npm_install.bzl
++++ internal/npm_install/npm_install.bzl
+@@ -24,7 +24,7 @@ See discussion in the README.
+ load("//internal/common:check_bazel_version.bzl", "check_bazel_version")
+ load("//internal/common:os_name.bzl", "is_windows_os")
+ load("//internal/node:node_labels.bzl", "get_node_label", "get_npm_label", "get_yarn_label")
+-
++load("//third_party/github.com/bazel_json/lib:json_parser.bzl", "json_parse")
+ COMMON_ATTRIBUTES = dict(dict(), **{
+     "always_hide_bazel_files": attr.bool(
+         doc = """Always hide Bazel build files such as `BUILD` and BUILD.bazel` by prefixing them with `_`.
+@@ -130,6 +130,33 @@ data attribute.
+         default = True,
+     ),
+ })
++YARN_ENVIRONMENT = [
++
++]
++def _process_pnp_file(repository_ctx, node,workspace_path):
++    repository_ctx.report_progress("Processing PNP file: Patching module directory")
++    result = repository_ctx.execute([
++        node,
++        "process_pnp_file.js",
++       workspace_path
++    ])
++    if result.return_code:
++        fail("process_pnp_file.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
++
++def _create_pnp_build_files(repository_ctx, rule_type, node,workspace_path):
++    error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
++
++    repository_ctx.report_progress("Processing node_modules: installing Bazel packages and generating BUILD files")
++    if repository_ctx.attr.manual_build_file_contents:
++        repository_ctx.file("manual_build_file_contents", repository_ctx.attr.manual_build_file_contents)
++    result = repository_ctx.execute([
++        node,
++        "generate_pnp_build_files.js",
++       workspace_path
++    ]) 
++    repository_ctx.report_progress("Running yarn install on")
++    if result.return_code:
++        fail("generate_pnp_build_files.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+ 
+ def _create_build_files(repository_ctx, rule_type, node, lock_file):
+     error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
+@@ -155,17 +182,25 @@ def _add_scripts(repository_ctx):
+         repository_ctx.path(Label("//internal/npm_install:pre_process_package_json.js")),
+         {},
+     )
+-
+-    repository_ctx.template(
++    repository_ctx.template( 
+         "generate_build_file.js",
+         repository_ctx.path(Label("//internal/npm_install:generate_build_file.js")),
+         {},
+     )
+ 
++    repository_ctx.template(
++        "generate_pnp_build_files.js",
++        repository_ctx.path(Label("//internal/npm_install:generate_pnp_build_files.js"))
++    )
++    repository_ctx.template(
++        "process_pnp_file.js",
++        repository_ctx.path(Label("//internal/npm_install:process_pnp_file.js"))
++    )
++
+ def _add_package_json(repository_ctx):
+     repository_ctx.symlink(
+         repository_ctx.attr.package_json,
+-        repository_ctx.path("package.json"),
++        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
+     )
+ 
+ def _add_data_dependencies(repository_ctx):
+@@ -267,6 +302,7 @@ cd "{root}" && "{npm}" {npm_args}
+     )
+     if result.return_code:
+         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
++    is_pnp = json_parse(result.stdout)["pnp"]
+ 
+     repository_ctx.report_progress("Running npm install on %s" % repository_ctx.attr.package_json)
+     result = repository_ctx.execute(
+@@ -292,8 +328,13 @@ cd "{root}" && "{npm}" {npm_args}
+ 
+     if repository_ctx.attr.symlink_node_modules:
+         _symlink_node_modules(repository_ctx)
++    if is_pnp:
++        _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
++        _create_pnp_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
++    else:
++        _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
++
+ 
+-    _create_build_files(repository_ctx, "npm_install", node, repository_ctx.attr.package_lock_json)
+ 
+ npm_install = repository_rule(
+     attrs = dict(COMMON_ATTRIBUTES, **{
+@@ -325,12 +366,12 @@ def _yarn_install_impl(repository_ctx):
+     if repository_ctx.attr.symlink_node_modules:
+         root = repository_ctx.path(repository_ctx.attr.package_json).dirname
+     else:
+-        root = repository_ctx.path("")
++        root = repository_ctx.path(repository_ctx.attr.package_json.package)
+ 
+     if not repository_ctx.attr.symlink_node_modules:
+         repository_ctx.symlink(
+             repository_ctx.attr.yarn_lock,
+-            repository_ctx.path("yarn.lock"),
++            repository_ctx.path(repository_ctx.attr.yarn_lock.package + "/yarn.lock"),
+         )
+         _add_package_json(repository_ctx)
+         _add_data_dependencies(repository_ctx)
+@@ -343,6 +384,25 @@ def _yarn_install_impl(repository_ctx):
+     )
+     if result.return_code:
+         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
++    is_pnp = json_parse(result.stdout)["pnp"]
++    result = repository_ctx.execute([
++        "sed",
++        "-i",
++        "-e",
++        "/^ *\"preinstall\".*$/d",
++        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
++    ])
++    if result.return_code:
++        fail("deleting preinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
++    result = repository_ctx.execute([
++        "sed",
++        "-i",
++        "-e",
++        "/^ *\"postinstall\".*$/d",
++        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
++    ])
++    if result.return_code:
++        fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+ 
+     args = [
+         repository_ctx.path(yarn),
+@@ -350,6 +410,8 @@ def _yarn_install_impl(repository_ctx):
+         root,
+         "--network-timeout",
+         str(repository_ctx.attr.network_timeout * 1000),  # in ms
++        "--modules-folder",
++        repository_ctx.path("node_modules"),
+     ]
+ 
+     if repository_ctx.attr.frozen_lockfile:
+@@ -371,6 +433,7 @@ def _yarn_install_impl(repository_ctx):
+     repository_ctx.report_progress("Running yarn install on %s" % repository_ctx.attr.package_json)
+     result = repository_ctx.execute(
+         args,
++        environment = {k: repository_ctx.os.environ[k] for k in YARN_ENVIRONMENT},
+         timeout = repository_ctx.attr.timeout,
+         quiet = repository_ctx.attr.quiet,
+     )
+@@ -379,8 +442,13 @@ def _yarn_install_impl(repository_ctx):
+ 
+     if repository_ctx.attr.symlink_node_modules:
+         _symlink_node_modules(repository_ctx)
+-
+-    _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
++    if is_pnp:
++        repository_ctx.report_progress("Processing PnP workspace")
++        _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
++        _create_pnp_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
++    else:
++        repository_ctx.report_progress("Processing node modules workspace")
++        _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
+ 
+ yarn_install = repository_rule(
+     attrs = dict(COMMON_ATTRIBUTES, **{
+@@ -420,4 +488,5 @@ cache_directory.
+     }),
+     doc = "Runs yarn install during workspace setup.",
+     implementation = _yarn_install_impl,
+-)
++    environ = YARN_ENVIRONMENT,
++)
+\ No newline at end of file
+diff --git internal/npm_install/pre_process_package_json.js internal/npm_install/pre_process_package_json.js
+index e0c704d..43b6dfb 100644
+--- internal/npm_install/pre_process_package_json.js
++++ internal/npm_install/pre_process_package_json.js
+@@ -53,9 +53,13 @@ function main() {
+     // Note: there is no equivalent npm functionality to clean out individual packages
+     // from the npm cache.
+     clearYarnFilePathCaches(pkg);
++    process.stdout.write(JSON.stringify({pnp: isPnp(pkg)}));
+   }
+ }
+ 
++function isPnp(pkg) {
++  return !!(pkg.installConfig && pkg.installConfig.pnp && pkg.installConfig.pnp === true)
++}
+ /**
+  * Runs `yarn cache clean` for all packages that have `file://` URIs.
+  * Work-around for https://github.com/yarnpkg/yarn/issues/2165.
+diff --git internal/npm_install/process_pnp_file.js internal/npm_install/process_pnp_file.js
+new file mode 100644
+index 0000000..cafb7ac
+--- /dev/null
++++ internal/npm_install/process_pnp_file.js
+@@ -0,0 +1,31 @@
++"use strict";
++var __importStar = (this && this.__importStar) || function (mod) {
++    if (mod && mod.__esModule) return mod;
++    var result = {};
++    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
++    result["default"] = mod;
++    return result;
++};
++Object.defineProperty(exports, "__esModule", { value: true });
++const fs = __importStar(require("fs"));
++const process = __importStar(require("process"));
++const path = __importStar(require("path"));
++if (require.main === module) {
++    main(process.argv[2]);
++}
++/**
++ * This patches a PnP file to force the resolver to resolve from the repository's directory
++ * not the entry_point's directory. PnP assumes they are the same so when bazel creates the
++ * pnp file in a different directory, the pnp files can't resolve the paths.
++ */
++function main(workspacePath) {
++    const pnpPath = path.join(workspacePath, ".pnp.js");
++    const pnpFile = fs.readFileSync(pnpPath, "utf8");
++    /**
++     * match the line in .pnp.js that defines the workspace to start looking for the yarn dependencies.
++     * .pnp.js specifically uses relativistic paths, so we must look for the dependencies from the same
++     * directory as where yarn_install was called
++     */
++    const patchedPnpFile = pnpFile.replace("issuerModule ? issuerModule.filename : `${process.cwd()}/`;", JSON.stringify(process.cwd()));
++    fs.writeFileSync("./.pnp.js", patchedPnpFile, "utf8");
++}
+diff --git internal/npm_install/process_pnp_file.ts internal/npm_install/process_pnp_file.ts
+new file mode 100644
+index 0000000..6433925
+--- /dev/null
++++ internal/npm_install/process_pnp_file.ts
+@@ -0,0 +1,28 @@
++import * as fs from "fs";
++import * as process from "process";
++import * as path from "path";
++if (require.main === module) {
++  main(process.argv[3]);
++}
++
++/**
++ * This patches a PnP file to force the resolver to resolve from the repository's directory
++ * not the entry_point's directory. PnP assumes they are the same so when bazel creates the
++ * pnp file in a different directory, the pnp files can't resolve the paths.
++ */
++function main(workspacePath: string) {
++  const pnpPath = path.join(workspacePath, ".pnp.js");
++  const pnpFile = fs.readFileSync(pnpPath, "utf8");
++  /**
++   * match the line in .pnp.js that defines the workspace to start looking for the yarn dependencies.
++   * .pnp.js specifically uses relativistic paths, so we must look for the dependencies from the same
++   * directory as where yarn_install was called
++   */
++
++  const patchedPnpFile = pnpFile.replace(
++    "issuerModule ? issuerModule.filename : `${process.cwd()}/`;",
++    JSON.stringify(process.cwd())
++  );
++  fs.writeFileSync("./.pnp.js", patchedPnpFile, "utf8");
++}
++
+diff --git third_party/github.com/bazel_json/LICENSE third_party/github.com/bazel_json/LICENSE
+new file mode 100644
+index 0000000..a5d6775
+--- /dev/null
++++ third_party/github.com/bazel_json/LICENSE
+@@ -0,0 +1,20 @@
++Copyright 2019 Erick Johnson <ejohnson82@gmail.com>
++
++Permission is hereby granted, free of charge, to any person obtaining
++a copy of this software and associated documentation files (the
++"Software"), to deal in the Software without restriction, including
++without limitation the rights to use, copy, modify, merge, publish,
++distribute, sublicense, and/or sell copies of the Software, and to
++permit persons to whom the Software is furnished to do so, subject to
++the following conditions:
++
++The above copyright notice and this permission notice shall be
++included in all copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
++NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
++LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
++OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
++WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+diff --git third_party/github.com/bazel_json/lib/BUILD third_party/github.com/bazel_json/lib/BUILD
+new file mode 100644
+index 0000000..650bcc8
+--- /dev/null
++++ third_party/github.com/bazel_json/lib/BUILD
+@@ -0,0 +1,5 @@
++package(default_visibility = ["//visibility:public"])
++
++licenses(["notice"])
++
++exports_files(["json_parser.bzl"])
+diff --git third_party/github.com/bazel_json/lib/json_parser.bzl third_party/github.com/bazel_json/lib/json_parser.bzl
+new file mode 100644
+index 0000000..7ebfaaf
+--- /dev/null
++++ third_party/github.com/bazel_json/lib/json_parser.bzl
+@@ -0,0 +1,675 @@
++# This is a Skylark/Java adaptation of http://www.json.org/JSON_checker/ a
++# push-down automaton originally design to check JSON syntax, attempting to be
++# extended to a full JSON parser.
++#
++# Unfortunately due to several reasons there are severe limitations for this
++# parser, and I do not recommend this for anything serious.
++#
++# Due to the (IMO) original awkward grammar of JSON_checker (namely the root
++# object is of a different mode than nested objects, no mode pushed on the stack
++# for object key/value entries (instead a pop/push cycle happens around
++# colons)... this grammar has been hacked to make reduction rules possible, but
++# it's all still quite hacky.
++#
++# Also due to Java/Skylark limitations on unicode character support, any parse
++# attempt is a best effort: https://github.com/bazelbuild/bazel/issues/4862
++#
++# I suggest reading the implementation at
++# http://www.json.org/JSON_checker/JSON_checker.c to get an idea of what's
++# happening here, the formatting there is much easier to read.
++#
++# See `json_parse` to get started.
++
++# TODO: (lots, this is non-exhaustive)
++# - Give names to these actions instead of negative numbers
++# - More descriptive errors, currently the "invalid action -1" error
++#   is extremely unhelpful.
++
++def _enumify_iterable(iterable, enum_dict):
++    """A hacky function to turn an iterable into a dict with whose keys are the
++    members of the iterable, and value is the index."""
++    for i, t in enumerate(iterable):
++        enum_dict[t] = i
++    return enum_dict
++
++__ = -1 # Alias for the invalid class
++_TOKEN_CLASSES = _enumify_iterable(iterable = [
++    'C_SPACE',  # space
++    'C_WHITE',  # other whitespace
++    'C_LCURB',  # {
++    'C_RCURB',  # }
++    'C_LSQRB',  # [
++    'C_RSQRB',  # ]
++    'C_COLON',  # :
++    'C_COMMA',  # ,
++    'C_QUOTE',  # "
++    'C_BACKS',  # \
++    'C_SLASH',  # /
++    'C_PLUS',   # +
++    'C_MINUS',  # -
++    'C_POINT',  # .
++    'C_ZERO',  # 0
++    'C_DIGIT',  # 123456789
++    'C_LOW_A',  # a
++    'C_LOW_B',  # b
++    'C_LOW_C',  # c
++    'C_LOW_D',  # d
++    'C_LOW_E',  # e
++    'C_LOW_F',  # f
++    'C_LOW_L',  # l
++    'C_LOW_N',  # n
++    'C_LOW_R',  # r
++    'C_LOW_S',  # s
++    'C_LOW_T',  # t
++    'C_LOW_U',  # u
++    'C_ABCDF',  # ABCDF
++    'C_E',      # E
++    'C_ETC',    # everything else
++], enum_dict = {'__' : __})
++
++_STATE_MAP = {
++    'GO' : 'start',
++    'OK' : 'ok',
++    'OB' : 'object',
++    'KE' : 'key',
++    'CO' : 'colon',
++    'VA' : 'value',
++    'AR' : 'array',
++    'ST' : 'string',
++    'ES' : 'escape',
++    'U1' : 'u1',
++    'U2' : 'u2',
++    'U3' : 'u3',
++    'U4' : 'u4',
++    'MI' : 'minus',
++    'ZE' : 'zero',
++    'IN' : 'integer',
++    'FR' : 'fraction',
++    'E1' : 'e',
++    'E2' : 'ex',
++    'E3' : 'exp',
++    'T1' : 'tr',
++    'T2' : 'tru',
++    'T3' : 'true',
++    'F1' : 'fa',
++    'F2' : 'fal',
++    'F3' : 'fals',
++    'F4' : 'false',
++    'N1' : 'nu',
++    'N2' : 'nul',
++    'N3' : 'null',
++}
++
++_STATES = _enumify_iterable(iterable = _STATE_MAP.keys(), enum_dict = {})
++_S = _STATES # A short alias
++
++# Tread some states as another for tokenizing. This is a hack to avoid
++# introducing new modes for parsing things like escaped string,
++# negative numbers, exponents, floats, etc...
++_TOKENIZER_STATE = {
++    _S["ES"] : _S["ST"],
++    _S["MI"] : _S["IN"],
++    _S["FR"] : _S["IN"],
++    _S["E1"] : _S["IN"],
++    _S["E2"] : _S["IN"],
++    _S["E3"] : _S["IN"],
++}
++
++_STATE_NAMES = _STATE_MAP.values()
++
++# Used for debugging and reduction hook names
++
++_MODE_NAMES = [
++    'EMPTY',
++    'ARRAY',
++    'OBJECT',
++    'ENTRY_KEY',
++    'ENTRY_VALUE',
++]
++
++_MODES = _enumify_iterable(iterable = _MODE_NAMES, enum_dict = {})
++
++_ASCII_CODEPOINT_MAP = {
++    # Currenlty non-printable ascii characters are simply not referencable in
++    # Java skylark
++    # https://github.com/bazelbuild/bazel/issues/4862
++    #
++    # For now these characters just do not exist in the map, this means unicode
++    # cannot be supported.
++
++    # "\x00" : 0, "\x01" : 1, "\x02" : 2, "\x03" : 3, "\x04" : 4, "\x05" : 5, "\x06" : 6, "\a" : 7,
++    # "\b" : 8, "\t" : 9, "\n" : 10, "\v" : 11, "\f" : 12, "\r" : 13, "\x0E" : 14, "\x0F" : 15,
++    # "\x10" : 16, "\x11" : 17, "\x12" : 18, "\x13" : 19, "\x14" : 20, "\x15" : 21, "\x16" : 22, "\x17" : 23,
++    # "\x18" : 24, "\x19" : 25, "\x1A" : 26, "\e" : 27, "\x1C" : 28, "\x1D" : 29, "\x1E" : 30, "\x1F" : 31,
++              "\t" : 9, "\n" : 10,                         "\r" : 13,
++
++    " " : 32, "!" : 33, "\"" : 34, "#" : 35, "$" : 36, "%" : 37, "&" : 38, "'" : 39,
++    "(" : 40, ")" : 41, "*" : 42, "+" : 43, "," : 44, "-" : 45, "." : 46, "/" : 47,
++    "0" : 48, "1" : 49, "2" : 50, "3" : 51, "4" : 52, "5" : 53, "6" : 54, "7" : 55,
++    "8" : 56, "9" : 57, ":" : 58, ";" : 59, "<" : 60, "=" : 61, ">" : 62, "?" : 63,
++
++    "@" : 64, "A" : 65, "B" : 66, "C" : 67, "D" : 68, "E" : 69, "F" : 70, "G" : 71,
++    "H" : 72, "I" : 73, "J" : 74, "K" : 75, "L" : 76, "M" : 77, "N" : 78, "O" : 79,
++    "P" : 80, "Q" : 81, "R" : 82, "S" : 83, "T" : 84, "U" : 85, "V" : 86, "W" : 87,
++    "X" : 88, "Y" : 89, "Z" : 90, "[" : 91, "\\" : 92, "]" : 93, "^" : 94, "_" : 95,
++
++    "`" : 96, "a" : 97, "b" : 98, "c" : 99, "d" : 100, "e" : 101, "f" : 102, "g" : 103,
++    "h" : 104, "i" : 105, "j" : 106, "k" : 107, "l" : 108, "m" : 109, "n" : 110, "o" : 111,
++    "p" : 112, "q" : 113, "r" : 114, "s" : 115, "t" : 116, "u" : 117, "v" : 118, "w" : 119,
++    # Commented out for the same reason as above, given the backspace code, \x7F
++    #    "x" : 120, "y" : 121, "z" : 122, "{" : 123, "|" : 124, "}" : 125, "~" : 126, "\x7F" : 127,
++    "x" : 120, "y" : 121, "z" : 122, "{" : 123, "|" : 124, "}" : 125, "~" : 126,
++}
++
++# This array maps the 128 ASCII characters into character classes.
++# The remaining Unicode characters should be mapped to C_ETC.
++# Non-whitespace control characters are errors.
++def _create_ascii_mappings(positioned_token_list):
++    ascii_mappings = []
++    for token in positioned_token_list:
++        ascii_mappings.append(_TOKEN_CLASSES[token])
++    return ascii_mappings
++
++_ASCII_CLASS_LIST = _create_ascii_mappings(positioned_token_list = [
++    '__',      '__',      '__',      '__',      '__',      '__',      '__',      '__',
++    '__',      'C_WHITE', 'C_WHITE', '__',      '__',      'C_WHITE', '__',      '__',
++    '__',      '__',      '__',      '__',      '__',      '__',      '__',      '__',
++    '__',      '__',      '__',      '__',      '__',      '__',      '__',      '__',
++
++    'C_SPACE', 'C_ETC',   'C_QUOTE', 'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',
++    'C_ETC',   'C_ETC',   'C_ETC',   'C_PLUS',  'C_COMMA', 'C_MINUS', 'C_POINT', 'C_SLASH',
++    'C_ZERO',  'C_DIGIT', 'C_DIGIT', 'C_DIGIT', 'C_DIGIT', 'C_DIGIT', 'C_DIGIT', 'C_DIGIT',
++    'C_DIGIT', 'C_DIGIT', 'C_COLON', 'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',
++
++    'C_ETC',   'C_ABCDF', 'C_ABCDF', 'C_ABCDF', 'C_ABCDF', 'C_E',     'C_ABCDF', 'C_ETC',
++    'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',
++    'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',
++    'C_ETC',   'C_ETC',   'C_ETC',   'C_LSQRB', 'C_BACKS', 'C_RSQRB', 'C_ETC',   'C_ETC',
++
++    'C_ETC',   'C_LOW_A', 'C_LOW_B', 'C_LOW_C', 'C_LOW_D', 'C_LOW_E', 'C_LOW_F', 'C_ETC',
++    'C_ETC',   'C_ETC',   'C_ETC',   'C_ETC',   'C_LOW_L', 'C_ETC',   'C_LOW_N', 'C_ETC',
++    'C_ETC',   'C_ETC',   'C_LOW_R', 'C_LOW_S', 'C_LOW_T', 'C_LOW_U', 'C_ETC',   'C_ETC',
++    'C_ETC',   'C_ETC',   'C_ETC',   'C_LCURB', 'C_ETC',   'C_RCURB', 'C_ETC',   'C_ETC'
++])
++
++_STATE_TRANSITION_TABLE = [
++#   The state transition table takes the current state and the current symbol,
++#   and returns either a new state or an action. An action is represented as a
++#   negative number. A JSON text is accepted if at the end of the text the
++#   state is OK and if the mode is MODE_EMPTY.
++#
++#   See the table at http://www.json.org/JSON_checker/JSON_checker.c for better
++#   readability.
++#
++#   This one has been modified to simplify reductions.
++#
++#                  white                                      1-9                                   ABCDF  etc
++#       space        |  {  }  [  ]  :  ,  "  \  /  +  -  .  0  |  a  b  c  d  e  f  l  n  r  s  t  u  |  E  |
++    [_S['GO'],_S['GO'],-6,__,-5,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # start  GO
++    [_S['OK'],_S['OK'],__,-8,__,-7,__,-3,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # ok     OK
++    [_S['OB'],_S['OB'],__,-9,__,__,__,__,_S['ST'],__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # object OB
++    [_S['KE'],_S['KE'],__,-9,__,__,__,__,-4,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # key    KE
++    [_S['CO'],_S['CO'],__,__,__,__,-2,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # colon  CO
++    [_S['VA'],_S['VA'],-6,__,-5,__,__,__,_S['ST'],__,__,__,_S['MI'],__,_S['ZE'],_S['IN'],__,__,__,__,__,_S['F1'],__,_S['N1'],__,__,_S['T1'],__,__,__,__], # value  VA
++    [_S['AR'],_S['AR'],-6,__,-5,-7,__,__,_S['ST'],__,__,__,_S['MI'],__,_S['ZE'],_S['IN'],__,__,__,__,__,_S['F1'],__,_S['N1'],__,__,_S['T1'],__,__,__,__], # array  AR
++    [_S['ST'],__,_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],-4,_S['ES'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST']], # string ST
++    [__,__,__,__,__,__,__,__,_S['ST'],_S['ST'],_S['ST'],__,__,__,__,__,__,_S['ST'],__,__,__,_S['ST'],__,_S['ST'],_S['ST'],__,_S['ST'],_S['U1'],__,__,__], # escape ES
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['U2'],_S['U2'],_S['U2'],_S['U2'],_S['U2'],_S['U2'],_S['U2'],_S['U2'],__,__,__,__,__,__,_S['U2'],_S['U2'],__], # u1     U1
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['U3'],_S['U3'],_S['U3'],_S['U3'],_S['U3'],_S['U3'],_S['U3'],_S['U3'],__,__,__,__,__,__,_S['U3'],_S['U3'],__], # u2     U2
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['U4'],_S['U4'],_S['U4'],_S['U4'],_S['U4'],_S['U4'],_S['U4'],_S['U4'],__,__,__,__,__,__,_S['U4'],_S['U4'],__], # u3     U3
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],_S['ST'],__,__,__,__,__,__,_S['ST'],_S['ST'],__], # u4     U4
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['ZE'],_S['IN'],__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # minus  MI
++    [_S['OK'],_S['OK'],__,-8,__,-7,__,-3,__,__,__,__,__,_S['FR'],__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # zero   ZE
++    [_S['OK'],_S['OK'],__,-8,__,-7,__,-3,__,__,__,__,__,_S['FR'],_S['IN'],_S['IN'],__,__,__,__,_S['E1'],__,__,__,__,__,__,__,__,_S['E1'],__], # int    IN
++    [_S['OK'],_S['OK'],__,-8,__,-7,__,-3,__,__,__,__,__,__,_S['FR'],_S['FR'],__,__,__,__,_S['E1'],__,__,__,__,__,__,__,__,_S['E1'],__], # frac   FR
++    [__,__,__,__,__,__,__,__,__,__,__,_S['E2'],_S['E2'],__,_S['E3'],_S['E3'],__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # e      E1
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['E3'],_S['E3'],__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # ex     E2
++    [_S['OK'],_S['OK'],__,-8,__,-7,__,-3,__,__,__,__,__,__,_S['E3'],_S['E3'],__,__,__,__,__,__,__,__,__,__,__,__,__,__,__], # exp    E3
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['T2'],__,__,__,__,__,__], # tr     T1
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['T3'],__,__,__], # tru    T2
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['OK'],__,__,__,__,__,__,__,__,__,__], # true   T3
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['F2'],__,__,__,__,__,__,__,__,__,__,__,__,__,__], # fa     F1
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['F3'],__,__,__,__,__,__,__,__], # fal    F2
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['F4'],__,__,__,__,__], # fals   F3
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['OK'],__,__,__,__,__,__,__,__,__,__], # false  F4
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['N2'],__,__,__], # nu     N1
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['N3'],__,__,__,__,__,__,__,__], # nul    N2
++    [__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,__,_S['OK'],__,__,__,__,__,__,__,__], # null   N3
++]
++
++
++_MAX_DEPTH = 20
++_DEBUG = False
++
++def _reject(checker, reason = "unknown reason"):
++    if (checker["rejected"]):
++      return False
++
++    checker["rejected"] = True
++    checker["rejected_reason"] = reason
++    if (checker["_DEBUG"]):
++        fail("failed to parse JSON: %s" % reason)
++    return False
++
++
++def _push(checker, mode):
++    checker["top"] += 1
++    if (checker["top"] > checker["max_depth"]):
++        return _reject(checker, "max depth exceeded")
++
++    checker["mode_stack"].insert(checker["top"], mode)
++    checker["reduction_stack"].insert(checker["top"], [])
++
++    if (checker["_DEBUG"]):
++        print("push mode: %s" % [_MODE_NAMES[m] for m in checker["mode_stack"]])
++
++
++def _pop(checker, mode):
++    top = checker["top"]
++    if (top < 0):
++        return _reject(checker, "invalid top index")
++    elif (not _peek_mode(checker) == mode):
++        return _reject(
++            checker,
++            "cannot pop unexpected mode %s expected %s" % (mode, checker["mode_stack"][top]))
++
++    if (checker["_DEBUG"]):
++        print("reducing " + _MODE_NAMES[mode])
++    reduction = _reduce(checker)
++
++    checker["reduction_stack"] = checker["reduction_stack"][0:top]
++    checker["reduction_stack"][top - 1].append(reduction)
++
++    checker["mode_stack"] = checker["mode_stack"][0:top]
++    checker["top"] -= 1
++
++    if (checker["_DEBUG"]):
++        print("after pop token stack: %s" % checker["reduction_stack"])
++        print("pop mode: %s" % [_MODE_NAMES[m] for m in checker["mode_stack"]])
++
++
++def _set_state(checker, state):
++    if (_get_tokenizer_state(state) != _get_tokenizer_state_from_checker(checker)):
++        _tokenize(checker)
++
++    if (checker["_DEBUG"]):
++        print("set_state: %s" % _STATE_NAMES[state])
++    checker["state"] = state
++
++
++def _get_state(checker):
++    return checker["state"]
++
++
++def _get_tokenizer_state_from_checker(checker):
++    return _get_tokenizer_state(checker["state"])
++
++
++def _get_tokenizer_state(state):
++    if state in _TOKENIZER_STATE:
++        state = _TOKENIZER_STATE[state]
++    return state
++
++
++def _add_next_char_to_state(checker, next_char):
++    if (checker["state_chars"] == None):
++        checker["state_chars"] = ""
++    checker["state_chars"] += next_char
++
++
++def _get_reduction_list(checker):
++    top = checker["top"]
++    return checker["reduction_stack"][top]
++
++
++def _tokenize(checker):
++    if (checker["state_chars"] == None):
++        return
++
++    mode_name = _MODE_NAMES[_peek_mode(checker)]
++    state = _get_tokenizer_state_from_checker(checker)
++    state_name = _STATE_NAMES[state]
++    chars = checker["state_chars"]
++
++    if (state_name in checker["tokenizer_hooks"]):
++        token = checker["tokenizer_hooks"][state_name](chars)
++        if (checker["_DEBUG"]):
++            print("tokenizing state '%s' with chars '%s'" % (state_name, chars))
++        _get_reduction_list(checker).append({
++            "mode" : mode_name,
++            "state" : state_name,
++            "reduction" : token
++        })
++    else:
++        if (checker["_DEBUG"]):
++            print("no tokenizer for state '%s' with chars '%s'" % (state_name, chars))
++
++    checker["state_chars"] = None
++
++def _reduce(checker):
++    _tokenize(checker)
++
++    state = _get_state(checker)
++    state_name = _STATE_NAMES[state]
++    mode_name = _MODE_NAMES[_peek_mode(checker)]
++
++    top = checker["top"]
++    upstream_reductions = _get_reduction_list(checker)
++
++    reducer_name = mode_name.lower()
++    if (not reducer_name in checker["reduction_hooks"]):
++        if (checker["_DEBUG"]):
++            print("no reducer found for: %s" % (reducer_name))
++        return upstream_reductions
++
++
++    if (checker["_DEBUG"]):
++        print("reduce_%s: %s" % (reducer_name, upstream_reductions))
++    reduction = checker["reduction_hooks"][reducer_name](upstream_reductions)
++
++    if (checker["_DEBUG"]):
++        print("_reduce to: %s" % reduction)
++    return {
++        "mode" : mode_name,
++        "state" : state_name,
++        "reduction": reduction
++    }
++
++
++def _peek_mode(checker):
++    top = checker["top"]
++    return checker["mode_stack"][top]
++
++
++def _handle_next_char(checker, json_string, char_index):
++    if (checker["rejected"]):
++        return False
++
++    next_json_char = json_string[char_index]
++    if (checker["_DEBUG"]):
++        print("handling char: %s (%d/%d): " % (next_json_char, char_index, len(json_string) - 1))
++
++    next_class = None
++    next_state = None
++    next_char = None
++
++    if (not next_json_char in _ASCII_CODEPOINT_MAP):
++        if (not checker["hacky_treatment_unknown_chars_as_etc"]):
++            return _reject(
++                checker,
++                "unable to map character: %s (%d/%d)" %
++                (next_json_char, char_index, len(json_string) - 1))
++        else:
++            print("trying to treat unknown char as C_ETC...",
++                  "hoping for the best: char (%d/%d)" % (char_index, len(json_string) - 1))
++            next_char = 127 # my hardcoded hack for C_ETC resolution
++    else:
++        next_char = _ASCII_CODEPOINT_MAP[next_json_char]
++
++    if (next_char == None):
++        return _reject(checker, "unprintable Java/skylark char: %s" % next_json_char)
++
++    next_class = _ASCII_CLASS_LIST[next_char]
++    if (next_class <= __):
++        return _reject(checker, "unknown character class for char: %s" % next_json_char)
++
++    next_state = _STATE_TRANSITION_TABLE[checker["state"]][next_class]
++
++    OK = _STATES["OK"]
++    OB = _STATES["OB"]
++    AR = _STATES["AR"]
++    CO = _STATES["CO"]
++    KE = _STATES["KE"]
++    VA = _STATES["VA"]
++    ST = _STATES["ST"]
++
++    orig_state = checker["state"]
++    orig_mode = _peek_mode(checker)
++
++    if (next_state >= 0):
++        _set_state(checker, next_state)
++    else:
++        if (checker["_DEBUG"]):
++            print("action: %s" % next_state)
++
++        if next_state == -9: # empty }
++            _pop(checker, _MODES["OBJECT"])
++            _set_state(checker, OK)
++
++        elif next_state == -8: # }
++            current_mode = _peek_mode(checker)
++            if current_mode == _MODES["ENTRY_VALUE"]:
++                _pop(checker, _MODES["ENTRY_VALUE"])
++
++            _pop(checker, _MODES["OBJECT"])
++            _set_state(checker, OK)
++
++        elif next_state == -7: # ]
++            _pop(checker, _MODES["ARRAY"])
++            _set_state(checker, OK)
++
++        elif next_state == -6: # {
++            _push(checker, _MODES["OBJECT"])
++            _set_state(checker, KE)
++
++        elif next_state == -5: # [
++            _push(checker, _MODES["ARRAY"])
++            _set_state(checker, AR)
++
++        elif next_state == -4: # "
++            current_mode = _peek_mode(checker)
++            if current_mode == _MODES["OBJECT"]:
++                _push(checker, _MODES["ENTRY_KEY"])
++                _set_state(checker, ST)
++            elif current_mode == _MODES["ENTRY_KEY"]:
++                _set_state(checker, CO)
++            elif current_mode == _MODES["ENTRY_VALUE"]:
++                _pop(checker, _MODES["ENTRY_VALUE"])
++                _set_state(checker, OK)
++            elif current_mode == _MODES["ARRAY"]: # or current_mode == _MODES["OBJECT"]:
++                _set_state(checker, OK)
++            else:
++                return _reject(checker, "invalid state transition from mode: %s" % current_mode)
++
++        elif next_state == -3: # ,
++            current_mode = _peek_mode(checker)
++
++            if current_mode == _MODES["ENTRY_VALUE"]:
++                _pop(checker, _MODES["ENTRY_VALUE"])
++                _set_state(checker, KE)
++
++            elif current_mode == _MODES["OBJECT"]:
++                _set_state(checker, KE)
++
++            elif current_mode == _MODES["ARRAY"]:
++                _set_state(checker, VA)
++
++            else:
++                return _reject(checker, "invalid state transition from mode: %s" % current_mode)
++
++        elif next_state == -2: # :
++            current_mode = _peek_mode(checker)
++            _pop(checker, _MODES["ENTRY_KEY"])
++            _push(checker, _MODES["ENTRY_VALUE"])
++            _set_state(checker, VA)
++
++        else:
++            first_char_index = char_index - 200 if char_index - 200 > 0 else 0
++            last_char_index = char_index + 200
++            return _reject(
++                checker,
++                "Could not parse the input:\n\n%s...\n\n at:\n\n%s...\n" %
++                    (json_string[char_index:char_index + 15], json_string[first_char_index:last_char_index].strip()))
++
++    _add_next_char_to_state(checker, next_json_char)
++
++    return checker["rejected"]
++
++
++def _verify_valid(checker):
++    return (checker["rejected"] == False and
++            checker["state"] == _STATES["OK"] and
++            _peek_mode(checker) == _MODES["EMPTY"])
++
++
++def _create_checker(
++        max_depth = _MAX_DEPTH,
++        debug = _DEBUG,
++        tokenizer_hooks = {},
++        reduction_hooks = {}):
++    """Creates a new JSON checker, given a proper set of tokenizer_hooks and
++    reduction_hooks, the checker can be extended into a parser.
++
++    tokenizer_hooks - called on state changes
++    reduction_hooks - called on mode exit
++
++    """
++    checker = {
++        "rejected" : False,
++        "rejected_reason" : None,
++        "max_depth" : max_depth,
++
++        "mode_stack" : [],
++        "top" : -1,
++        "state" : _STATES["GO"],
++        "state_chars"  : None, # Characters collected in the current state
++
++        "reduction_stack" : [],
++        "reduction_hooks": reduction_hooks,
++        "tokenizer_hooks": tokenizer_hooks,
++
++        # This is a big frowny face. This hack will treat double byte
++        # unicode characters at 2 separate chars. I /think/ this is
++        # safe for the parse itself, but it probably just means that
++        # the content will be f'd.
++        "hacky_treatment_unknown_chars_as_etc" : True,
++        "_DEBUG" : debug
++    }
++    _push(checker, _MODES["EMPTY"])
++    return checker
++
++
++def _reduce_array(reductions):
++    arr = []
++    for i in range(0, len(reductions)):
++        arr.append(reductions[i]["reduction"])
++    return arr
++
++
++def _reduce_object(reductions):
++    obj = dict()
++    for i in range(0, len(reductions) // 2):
++        idx = i * 2
++        key = reductions[idx]["reduction"]
++        val = reductions[idx + 1]["reduction"]
++        obj[key] = val
++    return obj
++
++
++def _reduce_literal(reductions):
++    return reductions[0]["reduction"]
++
++
++# https://docs.bazel.build/versions/master/skylark/lib/int.html
++_MAX_INT = 2147483647
++_MIN_INT = -2147483647
++def _tokenize_int(collected_chars):
++    # Drops precision due to no decimals in Skylark.
++    #
++    # https://tools.ietf.org/html/rfc8259#section-6
++    # "This specification allows implementations to set limits on the range
++    # and precision of numbers accepted."
++    if collected_chars.lower().find("e") >= 0:
++        print("crappily handling JSON exponents: %s" % collected_chars)
++        sig, exp = collected_chars.split("e", 2)
++        sign = "+"
++        if exp[0] == "-":
++            sign = "-"
++            exp = exp[1:len(exp)]
++        elif exp[0] == "+":
++            exp = exp[1:len(exp)]
++
++        sig = int(sig)
++        for i in range(0, int(exp)):
++            if sign == "+":
++                if _MAX_INT // 10 <= sig:
++                    return _MAX_INT
++                elif _MIN_INT // 10 >= sig:
++                    return _MIN_INT
++                sig *= 10
++            elif sign == "-":
++                if sig < 0:
++                    return 0
++                sig //= 10
++
++        return sig
++    elif collected_chars.find(".") >= 0:
++        print("crappily handling JSON decimal: %s" % collected_chars)
++        integer, fraction = collected_chars.split(".", 2)
++        if integer == "":
++            integer = 0
++        return int(integer)
++
++    return int(collected_chars)
++
++
++def _tokenize_null(collected_chars):
++    return None
++
++
++def _tokenize_true(collected_chars):
++    return True
++
++
++def _tokenize_false(collected_chars):
++    return False
++
++
++def _tokenize_string(collected_chars):
++    # Trim the leading "
++    return collected_chars[1:len(collected_chars)]
++
++
++def _print_reduction_stack(checker):
++    print("final reduction stack: %s" % checker["reduction_stack"])
++
++
++def _json_parser(**kwargs):
++    args = {
++        "max_depth" : kwargs.get("max_depth", _MAX_DEPTH),
++        "debug": kwargs.get("debug", _DEBUG),
++    }
++    return _create_checker(
++        tokenizer_hooks = {
++            "string": _tokenize_string,
++            "integer": _tokenize_int,
++            "null": _tokenize_null,
++            "true": _tokenize_true,
++            "false": _tokenize_false,
++        },
++        reduction_hooks = {
++            "entry_key" : _reduce_literal,
++            "entry_value" : _reduce_literal,
++            "object": _reduce_object,
++            "array": _reduce_array,
++        },
++        **args
++    )
++
++
++def json_parse(json_string, fail_on_invalid = True, **kwargs):
++    parser = _json_parser(**kwargs)
++
++    for i  in range(0, len(json_string)):
++        _handle_next_char(parser, json_string = json_string, char_index = i)
++
++    is_valid = _verify_valid(parser)
++    if (not is_valid):
++        invalid_msgs = [parser["rejected_reason"]]
++        if (fail_on_invalid):
++            fail("JSON parsing failed.\n%s\n\nparser:\n%s" % ("\n".join(invalid_msgs), parser))
++        else:
++            print("JSON parsing failed. %s" % "\n".join([str(msg) for msg in invalid_msgs]))
++            return None
++
++    return parser["reduction_stack"][0][0]["reduction"]
+diff --git third_party/github.com/bazel_json/lib/json_rules.bzl third_party/github.com/bazel_json/lib/json_rules.bzl
+new file mode 100644
+index 0000000..39e60e1
+--- /dev/null
++++ third_party/github.com/bazel_json/lib/json_rules.bzl
+@@ -0,0 +1,193 @@
++# IGNORE THIS FILE... it was probably a bad idea....
++
++
++
++# Skylark reference:
++# https://docs.bazel.build/versions/master/skylark/language.html
++# https://docs.bazel.build/versions/master/skylark/lib/globals.html
++# https://docs.bazel.build/versions/master/skylark/lib/attr.html
++#
++# - None
++# - bool
++# - dict
++# - function
++# - int
++# - list
++# - string
++# - depset
++# - struct
++#
++# JSON reference:
++# https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON
++# JSON Types:
++#
++# - null
++# - boolean
++# - string
++# - number
++# - array
++# - object
++JsonValue = provider(fields = ["value_internal"])
++
++JsonNullType = provider()
++JsonBooleanType = provider(fields = ["boolean_value"])
++JsonStringType = provider(fields = ["string_value"])
++JsonNumberType = provider(fields = ["number_value", "exponent"])
++JsonArrayType = provider(fields = ["json_type_values"])
++JsonObjectType = provider(fields = ["json_type_map"])
++
++# A list of lists of JSON type providers, useful as the value to the
++# providers attribute of a label attr
++_JSON_TYPE_PROVIDERS = [
++    [JsonNullType],
++    [JsonBooleanType],
++    [JsonStringType],
++    [JsonNumberType],
++    [JsonArrayType],
++    [JsonObjectType],
++]
++
++def _create_json_type_null(ctx):
++    return [
++        JsonValue(value_internal = None),
++        JsonNullType()
++    ]
++
++def _create_json_type_boolean(ctx):
++    v = ctx.attr.boolean_value
++    return [
++        JsonValue(value_internal = v),
++        JsonBooleanType(boolean_value = v)
++    ]
++
++def _create_json_type_string(ctx):
++    v = ctx.attr.string_value
++    return [
++        JsonValue(value_internal = v),
++        JsonStringType(string_value = v)
++    ]
++
++def _create_json_type_number(ctx):
++    v = (ctx.attr.number_value, ctx.attr.exponent)
++    return [
++        JsonValue(value_internal = v),
++        JsonNumberType(
++            number_value = v[0],
++            exponent = v[1],
++        )
++    ]
++
++def _create_json_type_array(ctx):
++    values = []
++    json_types = []
++    for label in ctx.attr.array_values:
++        values.append(label[JsonValue].value_internal)
++        json_types.append(_extract_json_type_from_label(label))
++    return [
++        JsonValue(value_internal = values),
++        JsonArrayType(json_type_values = json_types)
++    ]
++
++def _create_json_type_object(ctx):
++    value_map = dict()
++    json_type_map = dict()
++    for label in ctx.attr.inverted_object_map:
++        json_key = ctx.attr.inverted_object_map.get(label)
++        json_type = _extract_json_type_from_label(label)
++        value_map[json_key] = label[JsonValue].value_internal
++        json_type_map[json_key] = json_type
++    return [
++        JsonValue(value_internal = value_map),
++        JsonObjectType(json_type_map = json_type_map)
++    ]
++
++def _extract_json_type_from_label(label):
++    if JsonNullType in label:
++        return label[JsonNullType]
++    elif JsonBooleanType in label:
++        return label[JsonBooleanType]
++    elif JsonStringType in label:
++        return label[JsonStringType]
++    elif JsonNumberType in label:
++        return label[JsonNumberType]
++    elif JsonArrayType in label:
++        return label[JsonArrayType]
++    elif JsonObjectType in label:
++        return label[JsonObjectType]
++    else:
++        fail("unknown json type in label %s" % (label.name))
++
++json_type_null = rule(
++    implementation = _create_json_type_null,
++    attrs = {},
++)
++
++json_type_boolean = rule(
++    implementation = _create_json_type_boolean,
++    attrs = {
++        "boolean_value" : attr.bool(),
++    },
++)
++
++json_type_string = rule(
++    implementation = _create_json_type_string,
++    attrs = {
++        "string_value" : attr.string(),
++    },
++)
++
++json_type_number = rule(
++    implementation = _create_json_type_number,
++    attrs = {
++        "number_value" : attr.int(),
++        "exponent" : attr.int(),
++    },
++)
++
++json_type_array = rule(
++    implementation = _create_json_type_array,
++    attrs = {
++        "array_values" : attr.label_list(
++            providers = _JSON_TYPE_PROVIDERS
++        )
++    }
++)
++
++json_type_object = rule(
++    implementation = _create_json_type_object,
++    attrs = {
++        "inverted_object_map" : attr.label_keyed_string_dict(
++            providers = _JSON_TYPE_PROVIDERS
++        )
++    }
++)
++
++def _json_printer_impl(ctx):
++    for json_label in ctx.attr.json_values:
++        print("JSON(%s): %s" % (json_label.label, json_label[JsonValue].value_internal))
++
++json_printer = rule(
++    implementation = _json_printer_impl,
++    attrs = {
++        "json_values" : attr.label_list(
++            providers = [JsonValue]
++        )
++    }
++)
++
++def json(value):
++    if type(value) == "NoneType":
++        print("defined null rule")
++        json_type_null(name = "json_null_x")
++    elif type(value) == "string":
++        print("defined string rule")
++        json_type_string(name = "json_string_x", string_value = value)
++    elif type(value) == "int":
++        print("defined number rule")
++        json_type_number(name = "json_number_x", number_value = value)
++    elif type(value) == "list":
++        print("got a list")
++    elif type(value) == "dict":
++        print("got a dict")
++    else:
++        fail("unknown type: %s" % type(value))
+diff --git third_party/github.com/bazel_json/test/BUILD third_party/github.com/bazel_json/test/BUILD
+new file mode 100644
+index 0000000..0755a77
+--- /dev/null
++++ third_party/github.com/bazel_json/test/BUILD
+@@ -0,0 +1,109 @@
++load("//lib:json_rules.bzl",
++     "json_type_null",
++     "json_type_boolean",
++     "json_type_string",
++     "json_type_number",
++     "json_type_array",
++     "json_type_object",
++     "json_printer",
++     "json",
++)
++
++load(":json_parse_tests.bzl", "json_parse_test_suite")
++
++load("//lib:json_parser.bzl", "json_parse")
++
++json_parse_test_suite()
++
++
++
++
++# Default values
++json_type_null(name = "null_check")
++json_type_boolean(name = "boolean_check")
++json_type_string(name = "string_check")
++json_type_number(name = "number_check")
++json_type_array(name = "array_check")
++json_type_object(name = "object_check")
++
++# Value checks
++json_type_boolean(
++    name = "boolean_check_false",
++    boolean_value = False,
++)
++json_type_boolean(
++    name = "boolean_check_true",
++    boolean_value = True,
++)
++
++json_type_string(
++    name = "string_check_non_empty",
++    string_value = "my_json_string",
++)
++
++json_type_string(
++    name = "string_check_quoted",
++    string_value = "my 'quoted' json_string",
++)
++
++json_type_number(
++    name = "number_check_77",
++    number_value = 77,
++)
++
++json_type_number(
++    name = "number_check_fraction",
++    number_value = 77,
++    exponent = -2,
++)
++
++json_type_array(
++    name = "array_check_empty",
++    array_values = [],
++)
++
++json_type_array(
++    name = "array_check_values",
++    array_values = [
++        ":null_check",
++        ":boolean_check",
++        ":string_check",
++        ":number_check",
++        ":array_check",
++        ":object_check",
++    ],
++)
++
++json_type_object(
++    name = "object_check_empty",
++    inverted_object_map = {
++        ":array_check_values" : "an_array",
++    }
++)
++
++json_printer(
++    name = "my_printer",
++    json_values = [
++        ":null_check",
++        ":boolean_check",
++        ":string_check",
++        ":string_check_quoted",
++        ":string_check_non_empty",
++        ":number_check_77",
++        ":number_check_fraction",
++        ":array_check_values",
++        ":object_check_empty",
++    ],
++)
++
++json(None)
++
++json("a string")
++
++json(66)
++
++json(["a", "b"])
++
++json({
++    "foo" : "bar"
++})
+diff --git third_party/github.com/bazel_json/test/json_parse_test_data.bzl third_party/github.com/bazel_json/test/json_parse_test_data.bzl
+new file mode 100644
+index 0000000..81ec08a
+--- /dev/null
++++ third_party/github.com/bazel_json/test/json_parse_test_data.bzl
+@@ -0,0 +1,1170 @@
++# Auxillary data for json_parse_tests.bzl, kept here to simply neaten
++# up the test file.
++
++def get_pkg_jsons():
++    return {
++        "rollup" : """{
++  "name": "rollup",
++  "version": "0.57.1",
++  "description": "Next-generation ES6 module bundler",
++  "main": "dist/rollup.js",
++  "module": "dist/rollup.es.js",
++  "jsnext:main": "dist/rollup.es.js",
++  "typings": "dist/typings/node-entry.d.ts",
++  "bin": {
++    "rollup": "./bin/rollup"
++  },
++  "scripts": {
++    "pretest": "npm run build",
++    "test": "npm run test:only && npm run test:typescript",
++    "test:only": "mocha",
++    "test:leak": "node --expose-gc test/leak/index.js",
++    "test:quick": "mocha -b",
++    "pretest:typescript": "rm -rf test/typescript/dist && rm -rf test/typescript/typings && cp -r dist test/typescript/ && cp -r typings test/typescript/",
++    "test:typescript": "tsc -p test/typescript",
++    "pretest-coverage": "npm run build",
++    "test-coverage": "rm -rf coverage/* && istanbul cover --report json node_modules/.bin/_mocha -- -u exports -R spec test/test.js",
++    "posttest-coverage": "remap-istanbul -i coverage/coverage-final.json -o coverage/coverage-remapped.json -b dist && remap-istanbul -i coverage/coverage-final.json -o coverage/coverage-remapped.lcov -t lcovonly -b dist && remap-istanbul -i coverage/coverage-final.json -o coverage/coverage-remapped -t html -b dist",
++    "ci": "npm run test-coverage && codecov < coverage/coverage-remapped.lcov",
++    "prebuild": "rm -rf dist",
++    "build": "git rev-parse HEAD > .commithash && rollup -c && tsc -p tsconfig-types.json && chmod a+x bin/rollup",
++    "watch": "rollup -cw",
++    "prepublishOnly": "npm run lint && npm run test && npm run test:leak",
++    "prepare": "npm run build",
++    "lint": "eslint src browser bin test/test.js test/*/index.js test/utils test/**/_config.js",
++    "precommit": "lint-staged",
++    "postcommit": "git reset",
++    "perf": "node --expose-gc scripts/perf.js",
++    "perf:init": "node scripts/perf-init.js",
++    "perf:debug": "node --inspect-brk scripts/perf-debug.js"
++  },
++  "repository": "rollup/rollup",
++  "keywords": [
++    "modules",
++    "bundler",
++    "bundling",
++    "es6",
++    "optimizer"
++  ],
++  "author": "Rich Harris",
++  "contributors": [
++    "Oskar Segersvärd <victorystick@gmail.com>",
++    "Bogdan Chadkin <trysound@yandex.ru>"
++  ],
++  "license": "MIT",
++  "bugs": {
++    "url": "https://github.com/rollup/rollup/issues"
++  },
++  "homepage": "https://github.com/rollup/rollup",
++  "dependencies": {
++    "@types/acorn": "^4.0.3",
++    "acorn": "^5.5.3",
++    "acorn-dynamic-import": "^3.0.0",
++    "locate-character": "^2.0.5",
++    "pretty-ms": "^3.1.0",
++    "signal-exit": "^3.0.2",
++    "date-time": "^2.1.0",
++    "is-reference": "^1.1.0",
++    "sourcemap-codec": "^1.4.1",
++    "require-relative": "^0.8.7",
++    "rollup-pluginutils": "^2.0.1"
++  },
++  "devDependencies": {
++    "@types/chokidar": "^1.7.5",
++    "@types/minimist": "^1.2.0",
++    "@types/node": "^9.4.7",
++    "@types/pretty-ms": "^3.0.0",
++    "ansi-escapes": "^3.0.0",
++    "buble": "^0.19.3",
++    "cash-cp": "^0.2.0",
++    "cash-rm": "^0.2.0",
++    "chalk": "^2.3.2",
++    "codecov.io": "^0.1.6",
++    "console-group": "^0.3.1",
++    "eslint": "^4.18.2",
++    "eslint-plugin-import": "^2.9.0",
++    "execa": "^0.9.0",
++    "fixturify": "^0.3.4",
++    "husky": "^0.14.3",
++    "immutable": "^3.8.2",
++    "istanbul": "^0.4.3",
++    "lint-staged": "^7.0.0",
++    "magic-string": "^0.23.2",
++    "minimist": "^1.2.0",
++    "mocha": "^5.0.4",
++    "prettier": "^1.10.2",
++    "remap-istanbul": "^0.10.1",
++    "rollup": "^0.56.5",
++    "rollup-plugin-buble": "^0.19.2",
++    "rollup-plugin-commonjs": "^9.1.0",
++    "rollup-plugin-json": "^2.3.0",
++    "rollup-plugin-node-resolve": "^3.2.0",
++    "rollup-plugin-replace": "^2.0.0",
++    "rollup-plugin-string": "^2.0.0",
++    "rollup-plugin-typescript": "^0.8.1",
++    "rollup-watch": "^4.3.1",
++    "sander": "^0.6.0",
++    "source-map": "^0.6.1",
++    "source-map-support": "^0.5.3",
++    "typescript": "^2.7.2",
++    "uglify-js": "^3.3.14"
++  },
++  "files": [
++    "dist/rollup.browser.js",
++    "dist/rollup.es.js",
++    "dist/rollup.js",
++    "dist/**/*.d.ts",
++    "typings/package.json.d.ts",
++    "bin/rollup",
++    "README.md"
++  ],
++  "lint-staged": {
++    "*.ts": [
++      "prettier --write",
++      "git add"
++    ]
++  }
++}
++""",
++        "lodash" : """{
++  "name": "lodash",
++  "version": "4.17.4",
++  "license": "MIT",
++  "private": true,
++  "main": "lodash.js",
++  "engines": {
++    "node": ">=4.0.0"
++  },
++  "sideEffects": false,
++  "scripts": {
++    "build": "npm run build:main && npm run build:fp",
++    "build:fp": "node lib/fp/build-dist.js",
++    "build:fp-modules": "node lib/fp/build-modules.js",
++    "build:main": "node lib/main/build-dist.js",
++    "build:main-modules": "node lib/main/build-modules.js",
++    "doc": "node lib/main/build-doc github && npm run test:doc",
++    "doc:fp": "node lib/fp/build-doc",
++    "doc:site": "node lib/main/build-doc site",
++    "doc:sitehtml": "optional-dev-dependency marky-markdown@^9.0.1 && npm run doc:site && node lib/main/build-site",
++    "pretest": "npm run build",
++    "style": "eslint *.js .internal/**/*.js",
++    "test": "npm run test:main && npm run test:fp",
++    "test:doc": "markdown-doctest doc/*.md",
++    "test:fp": "node test/test-fp",
++    "test:main": "node test/test",
++    "validate": "npm run style && npm run test"
++  },
++  "devDependencies": {
++    "async": "^2.1.4",
++    "benchmark": "^2.1.3",
++    "chalk": "^1.1.3",
++    "cheerio": "^0.22.0",
++    "codecov.io": "~0.1.6",
++    "coveralls": "^2.11.15",
++    "curl-amd": "~0.8.12",
++    "docdown": "~0.7.2",
++    "dojo": "^1.12.1",
++    "ecstatic": "^2.1.0",
++    "eslint": "^3.15.0",
++    "eslint-plugin-import": "^2.2.0",
++    "fs-extra": "~1.0.0",
++    "glob": "^7.1.1",
++    "istanbul": "0.4.5",
++    "jquery": "^3.1.1",
++    "lodash": "4.17.3",
++    "lodash-doc-globals": "^0.1.1",
++    "markdown-doctest": "^0.9.1",
++    "optional-dev-dependency": "^2.0.0",
++    "platform": "^1.3.3",
++    "qunit-extras": "^3.0.0",
++    "qunitjs": "^2.1.0",
++    "request": "^2.79.0",
++    "requirejs": "^2.3.2",
++    "sauce-tunnel": "^2.5.0",
++    "uglify-js": "2.7.5",
++    "webpack": "^1.14.0"
++  },
++  "greenkeeper": {
++    "ignore": [
++      "lodash"
++    ]
++  }
++}
++""",
++        "express" : """{
++  "name": "express",
++  "description": "Fast, unopinionated, minimalist web framework",
++  "version": "4.16.3",
++  "author": "TJ Holowaychuk <tj@vision-media.ca>",
++  "contributors": [
++    "Aaron Heckmann <aaron.heckmann+github@gmail.com>",
++    "Ciaran Jessup <ciaranj@gmail.com>",
++    "Douglas Christopher Wilson <doug@somethingdoug.com>",
++    "Guillermo Rauch <rauchg@gmail.com>",
++    "Jonathan Ong <me@jongleberry.com>",
++    "Roman Shtylman <shtylman+expressjs@gmail.com>",
++    "Young Jae Sim <hanul@hanul.me>"
++  ],
++  "license": "MIT",
++  "repository": "expressjs/express",
++  "homepage": "http://expressjs.com/",
++  "keywords": [
++    "express",
++    "framework",
++    "sinatra",
++    "web",
++    "rest",
++    "restful",
++    "router",
++    "app",
++    "api"
++  ],
++  "dependencies": {
++    "accepts": "~1.3.5",
++    "array-flatten": "1.1.1",
++    "body-parser": "1.18.2",
++    "content-disposition": "0.5.2",
++    "content-type": "~1.0.4",
++    "cookie": "0.3.1",
++    "cookie-signature": "1.0.6",
++    "debug": "2.6.9",
++    "depd": "~1.1.2",
++    "encodeurl": "~1.0.2",
++    "escape-html": "~1.0.3",
++    "etag": "~1.8.1",
++    "finalhandler": "1.1.1",
++    "fresh": "0.5.2",
++    "merge-descriptors": "1.0.1",
++    "methods": "~1.1.2",
++    "on-finished": "~2.3.0",
++    "parseurl": "~1.3.2",
++    "path-to-regexp": "0.1.7",
++    "proxy-addr": "~2.0.3",
++    "qs": "6.5.1",
++    "range-parser": "~1.2.0",
++    "safe-buffer": "5.1.1",
++    "send": "0.16.2",
++    "serve-static": "1.13.2",
++    "setprototypeof": "1.1.0",
++    "statuses": "~1.4.0",
++    "type-is": "~1.6.16",
++    "utils-merge": "1.0.1",
++    "vary": "~1.1.2"
++  },
++  "devDependencies": {
++    "after": "0.8.2",
++    "cookie-parser": "~1.4.3",
++    "cookie-session": "1.3.2",
++    "ejs": "2.5.7",
++    "eslint": "2.13.1",
++    "express-session": "1.15.6",
++    "hbs": "4.0.1",
++    "istanbul": "0.4.5",
++    "marked": "0.3.17",
++    "method-override": "2.3.10",
++    "mocha": "3.5.3",
++    "morgan": "1.9.0",
++    "multiparty": "4.1.3",
++    "pbkdf2-password": "1.2.1",
++    "should": "13.2.1",
++    "supertest": "1.2.0",
++    "connect-redis": "~2.4.1",
++    "vhost": "~3.0.2"
++  },
++  "engines": {
++    "node": ">= 0.10.0"
++  },
++  "files": [
++    "LICENSE",
++    "History.md",
++    "Readme.md",
++    "index.js",
++    "lib/"
++  ],
++  "scripts": {
++    "lint": "eslint .",
++    "test": "mocha --require test/support/env --reporter spec --bail --check-leaks --no-exit test/ test/acceptance/",
++    "test-ci": "istanbul cover node_modules/mocha/bin/_mocha --report lcovonly -- --require test/support/env --reporter spec --check-leaks --no-exit test/ test/acceptance/",
++    "test-cov": "istanbul cover node_modules/mocha/bin/_mocha -- --require test/support/env --reporter dot --check-leaks --no-exit test/ test/acceptance/",
++    "test-tap": "mocha --require test/support/env --reporter tap --check-leaks --no-exit test/ test/acceptance/"
++  }
++}
++""",
++        "react" : """{
++  "private": true,
++  "version": "16.3.0-alpha.2",
++  "workspaces": [
++    "packages/*"
++  ],
++  "devDependencies": {
++    "art": "^0.10.1",
++    "async": "^1.5.0",
++    "babel-cli": "^6.6.5",
++    "babel-code-frame": "^6.26.0",
++    "babel-core": "^6.0.0",
++    "babel-eslint": "^8.0.0",
++    "babel-jest": "^22.0.6",
++    "babel-plugin-check-es2015-constants": "^6.5.0",
++    "babel-plugin-external-helpers": "^6.22.0",
++    "babel-plugin-syntax-trailing-function-commas": "^6.5.0",
++    "babel-plugin-transform-async-to-generator": "^6.22.0",
++    "babel-plugin-transform-class-properties": "^6.11.5",
++    "babel-plugin-transform-es2015-arrow-functions": "^6.5.2",
++    "babel-plugin-transform-es2015-block-scoped-functions": "^6.5.0",
++    "babel-plugin-transform-es2015-block-scoping": "^6.23.0",
++    "babel-plugin-transform-es2015-classes": "^6.5.2",
++    "babel-plugin-transform-es2015-computed-properties": "^6.5.2",
++    "babel-plugin-transform-es2015-destructuring": "^6.5.0",
++    "babel-plugin-transform-es2015-for-of": "^6.5.2",
++    "babel-plugin-transform-es2015-literals": "^6.5.0",
++    "babel-plugin-transform-es2015-modules-commonjs": "^6.5.2",
++    "babel-plugin-transform-es2015-object-super": "^6.5.0",
++    "babel-plugin-transform-es2015-parameters": "^6.5.0",
++    "babel-plugin-transform-es2015-shorthand-properties": "^6.5.0",
++    "babel-plugin-transform-es2015-spread": "^6.5.2",
++    "babel-plugin-transform-es2015-template-literals": "^6.5.2",
++    "babel-plugin-transform-es3-member-expression-literals": "^6.5.0",
++    "babel-plugin-transform-es3-property-literals": "^6.5.0",
++    "babel-plugin-transform-object-rest-spread": "^6.6.5",
++    "babel-plugin-transform-react-jsx-source": "^6.8.0",
++    "babel-plugin-transform-regenerator": "^6.26.0",
++    "babel-preset-react": "^6.5.0",
++    "babel-traverse": "^6.9.0",
++    "babylon": "6.15.0",
++    "bundle-collapser": "^1.1.1",
++    "chalk": "^1.1.3",
++    "cli-table": "^0.3.1",
++    "coffee-script": "^1.8.0",
++    "core-js": "^2.2.1",
++    "coveralls": "^2.11.6",
++    "create-react-class": "^15.6.3",
++    "cross-env": "^5.1.1",
++    "danger": "^3.0.4",
++    "del": "^2.0.2",
++    "derequire": "^2.0.3",
++    "escape-string-regexp": "^1.0.5",
++    "eslint": "^4.1.0",
++    "eslint-config-fbjs": "^1.1.1",
++    "eslint-plugin-babel": "^3.3.0",
++    "eslint-plugin-flowtype": "^2.25.0",
++    "eslint-plugin-jest": "^21.6.1",
++    "eslint-plugin-no-for-of-loops": "^1.0.0",
++    "eslint-plugin-react": "^6.7.1",
++    "eslint-plugin-react-internal": "link:./scripts/eslint-rules/",
++    "fbjs": "^0.8.16",
++    "fbjs-scripts": "^0.6.0",
++    "filesize": "^3.5.6",
++    "flow-bin": "^0.61.0",
++    "flow-coverage-report": "^0.4.0",
++    "git-branch": "^0.3.0",
++    "glob": "^6.0.4",
++    "glob-stream": "^6.1.0",
++    "gzip-js": "~0.3.2",
++    "gzip-size": "^3.0.0",
++    "jasmine-check": "^1.0.0-rc.0",
++    "jest": "^22.0.6",
++    "jest-diff": "^22.1.0",
++    "merge-stream": "^1.0.0",
++    "minimatch": "^3.0.4",
++    "minimist": "^1.2.0",
++    "mkdirp": "^0.5.1",
++    "ncp": "^2.0.0",
++    "object-assign": "^4.1.1",
++    "platform": "^1.1.0",
++    "prettier": "1.8.1",
++    "prop-types": "^15.6.0",
++    "random-seed": "^0.3.0",
++    "react-lifecycles-compat": "^1.0.2",
++    "rimraf": "^2.6.1",
++    "rollup": "^0.52.1",
++    "rollup-plugin-babel": "^3.0.1",
++    "rollup-plugin-closure-compiler-js": "^1.0.6",
++    "rollup-plugin-commonjs": "^8.2.6",
++    "rollup-plugin-node-resolve": "^2.1.1",
++    "rollup-plugin-prettier": "^0.3.0",
++    "rollup-plugin-replace": "^2.0.0",
++    "rollup-plugin-strip-banner": "^0.2.0",
++    "run-sequence": "^1.1.4",
++    "targz": "^1.0.1",
++    "through2": "^2.0.0",
++    "tmp": "~0.0.28",
++    "typescript": "~1.8.10",
++    "yargs": "^6.3.0"
++  },
++  "devEngines": {
++    "node": "8.x || 9.x"
++  },
++  "scripts": {
++    "build": "npm run version-check && node ./scripts/rollup/build.js",
++    "flow-coverage": "flow-coverage-report --config ./.flowcoverage",
++    "linc": "node ./scripts/tasks/linc.js",
++    "lint": "node ./scripts/tasks/eslint.js",
++    "lint-build": "node ./scripts/rollup/validate/index.js",
++    "postinstall": "node node_modules/fbjs-scripts/node/check-dev-engines.js package.json",
++    "debug-test": "cross-env NODE_ENV=development node --inspect-brk node_modules/.bin/jest --config ./scripts/jest/config.source.js --runInBand",
++    "test": "cross-env NODE_ENV=development jest --config ./scripts/jest/config.source.js",
++    "test-prod": "cross-env NODE_ENV=production jest --config ./scripts/jest/config.source.js",
++    "test-prod-build": "yarn test-build-prod",
++    "test-build": "cross-env NODE_ENV=development jest --config ./scripts/jest/config.build.js",
++    "test-build-prod": "cross-env NODE_ENV=production jest --config ./scripts/jest/config.build.js",
++    "flow": "node ./scripts/tasks/flow.js",
++    "prettier": "node ./scripts/prettier/index.js write-changed",
++    "prettier-all": "node ./scripts/prettier/index.js write",
++    "version-check": "node ./scripts/tasks/version-check.js"
++  }
++}
++""",
++        "jquery" : """{
++  "name": "jquery",
++  "title": "jQuery",
++  "description": "JavaScript library for DOM operations",
++  "version": "3.3.2-pre",
++  "main": "dist/jquery.js",
++  "homepage": "https://jquery.com",
++  "author": {
++    "name": "JS Foundation and other contributors",
++    "url": "https://github.com/jquery/jquery/blob/master/AUTHORS.txt"
++  },
++  "repository": {
++    "type": "git",
++    "url": "https://github.com/jquery/jquery.git"
++  },
++  "keywords": [
++    "jquery",
++    "javascript",
++    "browser",
++    "library"
++  ],
++  "bugs": {
++    "url": "https://github.com/jquery/jquery/issues"
++  },
++  "license": "MIT",
++  "dependencies": {},
++  "devDependencies": {
++    "babel-core": "7.0.0-beta.0",
++    "babel-plugin-transform-es2015-for-of": "7.0.0-beta.0",
++    "commitplease": "2.7.10",
++    "core-js": "2.4.1",
++    "eslint-config-jquery": "1.0.1",
++    "grunt": "1.0.1",
++    "grunt-babel": "7.0.0",
++    "grunt-cli": "1.2.0",
++    "grunt-compare-size": "0.4.2",
++    "grunt-contrib-uglify": "3.0.1",
++    "grunt-contrib-watch": "1.0.0",
++    "grunt-eslint": "20.0.0",
++    "grunt-git-authors": "3.2.0",
++    "grunt-jsonlint": "1.1.0",
++    "grunt-karma": "2.0.0",
++    "grunt-newer": "1.3.0",
++    "grunt-npmcopy": "0.1.0",
++    "gzip-js": "0.3.2",
++    "husky": "0.14.3",
++    "insight": "0.8.4",
++    "jsdom": "5.6.1",
++    "karma": "1.7.0",
++    "karma-browserstack-launcher": "1.3.0",
++    "karma-chrome-launcher": "2.2.0",
++    "karma-firefox-launcher": "1.0.1",
++    "karma-qunit": "1.2.1",
++    "load-grunt-tasks": "3.5.2",
++    "native-promise-only": "0.8.1",
++    "promises-aplus-tests": "2.1.2",
++    "q": "1.5.0",
++    "qunit-assert-step": "1.0.3",
++    "qunitjs": "1.23.1",
++    "raw-body": "2.2.0",
++    "requirejs": "2.3.3",
++    "sinon": "2.3.7",
++    "sizzle": "2.3.3",
++    "strip-json-comments": "2.0.1",
++    "testswarm": "1.1.0",
++    "uglify-js": "3.3.12"
++  },
++  "scripts": {
++    "build": "npm install && grunt",
++    "start": "grunt watch",
++    "test:browserless": "grunt && grunt test:slow",
++    "test:browser": "grunt && grunt karma:main",
++    "test": "grunt && grunt test:slow && grunt karma:main",
++    "jenkins": "npm run test:browserless",
++    "precommit": "grunt lint:newer qunit_fixture",
++    "commitmsg": "node node_modules/commitplease"
++  },
++  "commitplease": {
++    "nohook": true,
++    "components": [
++      "Docs",
++      "Tests",
++      "Build",
++      "Support",
++      "Release",
++      "Core",
++      "Ajax",
++      "Attributes",
++      "Callbacks",
++      "CSS",
++      "Data",
++      "Deferred",
++      "Deprecated",
++      "Dimensions",
++      "Effects",
++      "Event",
++      "Manipulation",
++      "Offset",
++      "Queue",
++      "Selector",
++      "Serialize",
++      "Traversing",
++      "Wrap"
++    ],
++    "markerPattern": "^((clos|fix|resolv)(e[sd]|ing))|^(refs?)",
++    "ticketPattern": "^((Closes|Fixes) ([a-zA-Z]{2,}-)[0-9]+)|^(Refs? [^#])"
++  }
++}
++""",
++        "q" : """{
++  "name": "q",
++  "version": "1.5.1",
++  "description": "A library for promises (CommonJS/Promises/A,B,D)",
++  "homepage": "https://github.com/kriskowal/q",
++  "author": "Kris Kowal <kris@cixar.com> (https://github.com/kriskowal)",
++  "keywords": [
++    "q",
++    "promise",
++    "promises",
++    "promises-a",
++    "promises-aplus",
++    "deferred",
++    "future",
++    "async",
++    "flow control",
++    "fluent",
++    "browser",
++    "node"
++  ],
++  "contributors": [
++    "Kris Kowal <kris@cixar.com> (https://github.com/kriskowal)",
++    "Irakli Gozalishvili <rfobic@gmail.com> (http://jeditoolkit.com)",
++    "Domenic Denicola <domenic@domenicdenicola.com> (http://domenicdenicola.com)"
++  ],
++  "bugs": {
++    "mail": "kris@cixar.com",
++    "url": "http://github.com/kriskowal/q/issues"
++  },
++  "license": "MIT",
++  "main": "q.js",
++  "files": [
++    "LICENSE",
++    "q.js",
++    "queue.js"
++  ],
++  "repository": {
++    "type": "git",
++    "url": "git://github.com/kriskowal/q.git"
++  },
++  "engines": {
++    "node": ">=0.6.0",
++    "teleport": ">=0.2.0"
++  },
++  "dependencies": {},
++  "devDependencies": {
++    "cover": "*",
++    "grunt": "~0.4.1",
++    "grunt-cli": "~0.1.9",
++    "grunt-contrib-uglify": "~0.9.1",
++    "jasmine-node": "1.11.0",
++    "jshint": "~2.1.9",
++    "matcha": "~0.2.0",
++    "opener": "*",
++    "promises-aplus-tests": "1.x"
++  },
++  "scripts": {
++    "test": "npm ls -s && jasmine-node spec && promises-aplus-tests spec/aplus-adapter && npm run -s lint",
++    "test-browser": "opener spec/q-spec.html",
++    "benchmark": "matcha",
++    "lint": "jshint q.js",
++    "cover": "cover run jasmine-node spec && cover report html && opener cover_html/index.html",
++    "minify": "grunt",
++    "prepublish": "grunt"
++  },
++  "overlay": {
++    "teleport": {
++      "dependencies": {
++        "system": ">=0.0.4"
++      }
++    }
++  },
++  "directories": {
++    "test": "./spec"
++  }
++}
++""",
++        # YUCK!!! NOTE the raw literal quoting, to avoid double
++        # escaping the backslash escaped quotes below.
++        "rxjs" : r'''{
++  "name": "@reactivex/rxjs",
++  "version": "6.0.0-beta.0",
++  "description": "Reactive Extensions for modern JavaScript",
++  "main": "index.js",
++  "sideEffects": false,
++  "config": {
++    "commitizen": {
++      "path": "cz-conventional-changelog"
++    }
++  },
++  "nyc": {
++    "include": [
++      "src/*.ts",
++      "src/**/*.ts"
++    ],
++    "exclude": [
++      "node_modules",
++      "dist",
++      "*.d.ts",
++      "src/**/MiscJSDoc.ts"
++    ],
++    "extension": [
++      ".ts"
++    ],
++    "require": [
++      "ts-node/register"
++    ],
++    "reporter": [
++      "html"
++    ],
++    "all": true
++  },
++  "lint-staged": {
++    "*.@(js)": [
++      "eslint --fix",
++      "git add"
++    ],
++    "*.@(ts)": [
++      "tslint --fix",
++      "git add"
++    ]
++  },
++  "scripts-info": {
++    "info": "List available script",
++    "build_all": "Build all packages (ES6, CJS, UMD) and generate packages",
++    "build_cjs": "Build CJS package with clean up existing build",
++    "build_esm5": "Build ESM/ES5 package with clean up existing build",
++    "build_esm2015": "Build ESM/ES2015 package with clean up existing build",
++    "build_closure_core": "Minify Global core build using closure compiler",
++    "build_global": "Build Global package, then minify build",
++    "build_perf": "Build CJS & Global build, run macro performance test",
++    "build_docs": "Build ESM2015 & global package, create documentation using it",
++    "clean_dist_cjs": "Clean up existing CJS package output",
++    "clean_dist_esm5": "Clean up existing ESM/ES5 package output",
++    "clean_dist_esm2015": "Clean up existing ESM/ES2015 package output",
++    "clean_dist_global": "Clean up existing Global package output",
++    "commit": "Run git commit wizard",
++    "compile_dist_cjs": "Compile codebase into CJS module",
++    "compile_module_esm5": "Compile codebase into ESM/ES5",
++    "compile_dist_esm2015": "Compile codebase into ESM/ES2015",
++    "lint_perf": "Run lint against performance test suite",
++    "lint_spec": "Run lint against test spec",
++    "lint_src": "Run lint against source",
++    "lint": "Run lint against everything",
++    "perf": "Run macro performance benchmark",
++    "perf_micro": "Run micro performance benchmark",
++    "test_browser": "Execute mocha test runner on browser against existing test spec build",
++    "test": "Execute mocha test runner",
++    "test:cover": "Execute test coverage",
++    "tests2png": "Generate marble diagram image from test spec",
++    "watch": "Watch codebase, trigger compile when source code changes"
++  },
++  "scripts": {
++    "precommit": "lint-staged",
++    "commitmsg": "validate-commit-msg",
++    "info": "npm-scripts-info",
++    "build_all": "npm-run-all compat_build_all clean_dist copy_sources build_cjs build_esm5 build_esm2015 build_esm5_for_rollup build_umd build_legacy_reexport generate_packages copy_for_tests",
++    "build_cjs": "npm-run-all clean_dist_cjs compile_dist_cjs",
++    "build_esm5": "npm-run-all clean_dist_esm5 compile_dist_esm5",
++    "build_esm5_for_rollup": "npm-run-all clean_dist_esm5_for_rollup compile_dist_esm5_for_rollup && mkdirp dist/esm5_for_rollup/node_modules && shx cp -r ./dist-compat/package ./dist/esm5_for_rollup/node_modules/rxjs-compat",
++    "build_esm2015": "npm-run-all clean_dist_esm2015 compile_dist_esm2015",
++    "build_esm2015_for_docs": "npm-run-all clean_dist_esm2015 compile_dist_esm2015_for_docs",
++    "build_legacy_reexport": "npm-run-all compile_legacy_reexport",
++    "build_closure_core": "node ./tools/make-closure-core.js",
++    "build_global": "npm-run-all clean_dist_global build_esm5_for_rollup && mkdirp ./dist/global && node ./tools/make-umd-bundle.js && npm-run-all build_closure_core clean_dist_esm5_for_rollup",
++    "build_umd": "npm-run-all clean_dist_global && mkdirp ./dist/global && node ./tools/make-umd-bundle.js && npm-run-all build_closure_core",
++    "build_perf": "webdriver-manager update && npm-run-all build_cjs build_global perf",
++    "build_docs": "npm-run-all build_global build_esm2015_for_docs build_cjs tests2png decision_tree_widget && esdoc -c esdoc.json && npm-run-all clean_dist_esm2015",
++    "build_spec": "npm-run-all build_cjs generate_packages copy_for_tests",
++    "build_spec_full": "npm-run-all compat_build_cjs compile_legacy_reexport compat_generate_packages build_spec",
++    "build_spec_browser": "webpack --config spec/support/webpack.mocha.config.js",
++    "clean_dist": "shx rm -rf ./dist",
++    "clean_dist_cjs": "shx rm -rf ./dist/cjs",
++    "clean_dist_esm5": "shx rm -rf ./dist/esm5",
++    "clean_dist_esm5_for_rollup": "shx rm -rf ./dist/esm5_for_rollup",
++    "clean_dist_esm2015": "shx rm -rf ./dist/esm2015",
++    "clean_dist_global": "shx rm -rf ./dist/global",
++    "commit": "git-cz",
++    "compile_dist_cjs": "tsc -p ./tsconfig/tsconfig.cjs.json",
++    "compile_dist_esm5": "tsc -p ./tsconfig/tsconfig.esm5.json",
++    "compile_dist_esm2015": "tsc -p ./tsconfig/tsconfig.esm2015.json",
++    "compile_dist_esm2015_for_docs": "tsc ./dist/src/internal/Rx.ts ./dist/src/add/observable/of.ts ./dist/src/MiscJSDoc.ts -m es2015   --sourceMap --outDir ./dist/es6 --target es2015 -d --diagnostics --pretty --noImplicitAny --noImplicitReturns --noImplicitThis --suppressImplicitAnyIndexErrors --moduleResolution node",
++    "compile_dist_esm5_for_rollup": "tsc -p ./tsconfig/tsconfig.esm5.rollup.json",
++    "compile_legacy_reexport": "tsc -p ./tsconfig/tsconfig.legacy-reexport.json",
++    "copy_sources": "mkdirp dist && shx cp -r ./src/ ./dist/src",
++    "copy_for_tests": "shx rm -rf ./spec-build && shx cp -r ./spec/ ./spec-build/ && mkdirp ./spec-build/node_modules && shx cp -r ./dist/package/ ./spec-build/node_modules/rxjs && shx cp -r ./dist-compat/package/ ./spec-build/node_modules/rxjs-compat",
++    "decision_tree_widget": "cd doc/decision-tree-widget && npm run build && cd ../..",
++    "doctoc": "doctoc CONTRIBUTING.md",
++    "generate_packages": "node .make-packages.js",
++    "lint_perf": "eslint perf/",
++    "lint_spec": "tslint -c tslint.json \"spec/**/*.ts\"",
++    "lint_src": "tslint -c tslint.json \"src/**/*.ts\"",
++    "lint": "npm-run-all --parallel lint_*",
++    "perf": "protractor protractor.conf.js",
++    "perf_micro": "node ./perf/micro/index.js",
++    "prepublish": "shx rm -rf ./typings && npm run build_all",
++    "publish_docs": "./publish_docs.sh",
++    "test_browser": "npm-run-all build_spec_browser && opn spec/support/mocha-browser-runner.html",
++    "test": "cross-env TS_NODE_FAST=true mocha --require ts-node/register --opts spec-build/support/coverage.opts \"spec-build/**/*-spec.ts\"",
++    "test:cover": "cross-env TS_NODE_FAST=true nyc npm test",
++    "test:circular": "dependency-cruise --validate .dependency-cruiser.json -x \"^node_modules\" src",
++    "test:systemjs": "node integration/systemjs/systemjs-compatibility-spec.js",
++    "tests2png": "mkdirp tmp/docs/img && cross-env TS_NODE_FAST=true mocha --compilers ts:ts-node/register --opts spec/support/tests2png.opts \"spec/**/*-spec.ts\"",
++    "watch": "watch \"echo triggering build && npm run build_spec && npm run test && echo build completed\" src -d -u -w=15",
++    "compat_build_all": "npm-run-all compat_clean_dist compat_build_cjs compat_build_esm5 compat_build_esm2015 compat_generate_packages",
++    "compat_build_cjs": "npm-run-all compat_clean_dist_cjs compat_compile_dist_cjs",
++    "compat_build_esm5": "npm-run-all compat_clean_dist_esm5 compat_compile_dist_esm5",
++    "compat_build_esm2015": "npm-run-all compat_clean_dist_esm2015 compat_compile_dist_esm2015",
++    "compat_clean_dist": "shx rm -rf ./dist-compat",
++    "compat_clean_dist_cjs": "shx rm -rf ./dist-compat/cjs",
++    "compat_clean_dist_esm5": "shx rm -rf ./dist-compat/esm5",
++    "compat_clean_dist_esm2015": "shx rm -rf ./dist-compat/esm2015",
++    "compat_compile_dist_cjs": "tsc -p ./tsconfig/compat/tsconfig.cjs.json",
++    "compat_compile_dist_esm5": "tsc -p ./tsconfig/compat/tsconfig.esm5.json",
++    "compat_compile_dist_esm2015": "tsc -p ./tsconfig/compat/tsconfig.esm2015.json",
++    "compat_copy_sources": "mkdirp dist-compat && shx cp -r ./compat/ ./dist-compat/",
++    "compat_generate_packages": "node .make-compat-package.js"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git@github.com:ReactiveX/RxJS.git"
++  },
++  "keywords": [
++    "Rx",
++    "RxJS",
++    "ReactiveX",
++    "ReactiveExtensions",
++    "Streams",
++    "Observables",
++    "Observable",
++    "Stream",
++    "ES6",
++    "ES2015"
++  ],
++  "author": "Ben Lesh <ben@benlesh.com>",
++  "contributors": [
++    {
++      "name": "Ben Lesh",
++      "email": "ben@benlesh.com"
++    },
++    {
++      "name": "Paul Taylor",
++      "email": "paul.e.taylor@me.com"
++    },
++    {
++      "name": "Jeff Cross",
++      "email": "crossj@google.com"
++    },
++    {
++      "name": "Matthew Podwysocki",
++      "email": "matthewp@microsoft.com"
++    },
++    {
++      "name": "OJ Kwon",
++      "email": "kwon.ohjoong@gmail.com"
++    },
++    {
++      "name": "Andre Staltz",
++      "email": "andre@staltz.com"
++    }
++  ],
++  "license": "Apache-2.0",
++  "bugs": {
++    "url": "https://github.com/ReactiveX/RxJS/issues"
++  },
++  "homepage": "https://github.com/ReactiveX/RxJS",
++  "dependencies": {
++    "tslib": "^1.9.0"
++  },
++  "devDependencies": {
++    "@angular-devkit/build-optimizer": "0.0.24",
++    "@types/chai": "4.1.2",
++    "@types/lodash": "4.14.102",
++    "@types/mocha": "2.2.48",
++    "@types/node": "9.4.5",
++    "@types/sinon": "4.1.3",
++    "@types/sinon-chai": "2.7.29",
++    "babel-polyfill": "6.26.0",
++    "benchmark": "2.1.0",
++    "benchpress": "2.0.0-beta.1",
++    "chai": "4.1.2",
++    "color": "3.0.0",
++    "colors": "1.1.2",
++    "commitizen": "2.9.6",
++    "coveralls": "3.0.0",
++    "cross-env": "5.1.3",
++    "cz-conventional-changelog": "1.2.0",
++    "danger": "1.1.0",
++    "dependency-cruiser": "2.13.0",
++    "doctoc": "1.3.0",
++    "escape-string-regexp": "1.0.5",
++    "esdoc": "0.4.7",
++    "eslint": "4.17.0",
++    "fs-extra": "5.0.0",
++    "get-folder-size": "1.0.1",
++    "glob": "7.1.2",
++    "gm": "1.23.1",
++    "google-closure-compiler-js": "20170218.0.0",
++    "gzip-size": "4.1.0",
++    "http-server": "0.11.1",
++    "husky": "0.14.3",
++    "klaw-sync": "3.0.2",
++    "lint-staged": "3.2.5",
++    "lodash": "4.17.5",
++    "markdown-doctest": "0.9.1",
++    "minimist": "1.2.0",
++    "mkdirp": "0.5.1",
++    "mocha": "5.0.0",
++    "mocha-in-sauce": "0.0.1",
++    "npm-run-all": "4.1.2",
++    "npm-scripts-info": "0.3.6",
++    "nyc": "11.4.1",
++    "opn-cli": "3.1.0",
++    "platform": "1.3.5",
++    "promise": "8.0.1",
++    "protractor": "3.1.1",
++    "rollup": "0.36.3",
++    "rollup-plugin-inject": "2.0.0",
++    "rollup-plugin-node-resolve": "2.0.0",
++    "rx": "latest",
++    "rxjs": "^5.5.7",
++    "shx": "0.2.2",
++    "sinon": "4.3.0",
++    "sinon-chai": "2.14.0",
++    "source-map-support": "0.5.3",
++    "symbol-observable": "1.0.1",
++    "systemjs": "^0.21.0",
++    "ts-node": "4.1.0",
++    "tslint": "5.9.1",
++    "tslint-no-unused-expression-chai": "0.0.3",
++    "typescript": "latest",
++    "validate-commit-msg": "2.14.0",
++    "watch": "1.0.2",
++    "webpack": "1.13.1",
++    "xmlhttprequest": "1.8.0"
++  },
++  "engines": {
++    "npm": ">=2.0.0"
++  },
++  "typings": "./dist/package/Rx.d.ts"
++}
++''',
++        "aws-sdk-js" : """{
++  "name": "aws-sdk",
++  "description": "AWS SDK for JavaScript",
++  "version": "2.211.0",
++  "author": {
++    "name": "Amazon Web Services",
++    "email": "",
++    "url": "https://aws.amazon.com/"
++  },
++  "homepage": "https://github.com/aws/aws-sdk-js",
++  "contributors": [
++    "Loren Segal <lsegal@amazon.com>",
++    "Trevor Rowe <trevrowe@amazon.com>"
++  ],
++  "devDependencies": {
++    "@types/node": "^6.0.46",
++    "browserify": "13.1.0",
++    "chai": "^3.0",
++    "codecov": "^1.0.1",
++    "coffee-script": "1.6.3",
++    "coffeeify": "*",
++    "cucumber": "0.5.x",
++    "eslint": "1.x",
++    "hash-test-vectors": "^1.3.2",
++    "insert-module-globals": "^7.0.0",
++    "istanbul": "*",
++    "jasmine": "^2.5.3",
++    "jasmine-core": "^2.5.2",
++    "json-loader": "^0.5.4",
++    "karma": "^1.4.1",
++    "karma-jasmine": "^1.1.0",
++    "karma-phantomjs-launcher": "1.0.2",
++    "mocha": "^3.0.0",
++    "phantomjs-prebuilt": "2.1.15",
++    "repl.history": "*",
++    "semver": "*",
++    "typescript": "2.0.8",
++    "uglify-js": "2.x",
++    "webpack": "^1.15.0"
++  },
++  "dependencies": {
++    "buffer": "4.9.1",
++    "events": "^1.1.1",
++    "jmespath": "0.15.0",
++    "querystring": "0.2.0",
++    "sax": "1.2.1",
++    "url": "0.10.3",
++    "uuid": "3.1.0",
++    "xml2js": "0.4.17",
++    "xmlbuilder": "4.2.1"
++  },
++  "main": "lib/aws.js",
++  "browser": {
++    "lib/aws.js": "./lib/browser.js",
++    "fs": false,
++    "./global.js": "./browser.js",
++    "./lib/node_loader.js": "./lib/browser_loader.js"
++  },
++  "browserify": {
++    "transform": "./dist-tools/transform.js"
++  },
++  "react-native": {
++    "fs": "./lib/empty.js",
++    "./lib/node_loader.js": "./lib/react-native-loader.js",
++    "./lib/browser_loader.js": "./lib/react-native-loader.js",
++    "./lib/core.js": "./dist/aws-sdk-core-react-native.js",
++    "xml2js": "./dist/xml2js.js"
++  },
++  "directories": {
++    "lib": "lib"
++  },
++  "types": "index.d.ts",
++  "typings": "index.d.ts",
++  "engines": {
++    "node": ">= 0.8.0"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git://github.com/aws/aws-sdk-js"
++  },
++  "bugs": {
++    "url": "https://github.com/aws/aws-sdk-js/issues",
++    "mail": ""
++  },
++  "license": "Apache-2.0",
++  "keywords": [
++    "api",
++    "amazon",
++    "aws",
++    "ec2",
++    "simpledb",
++    "s3",
++    "sqs",
++    "ses",
++    "sns",
++    "route53",
++    "rds",
++    "elasticache",
++    "cloudfront",
++    "fps",
++    "cloudformation",
++    "cloudwatch",
++    "dynamodb",
++    "iam",
++    "swf",
++    "autoscaling",
++    "cloudsearch",
++    "elb",
++    "loadbalancing",
++    "emr",
++    "mapreduce",
++    "importexport",
++    "storagegateway",
++    "workflow",
++    "ebs",
++    "vpc",
++    "beanstalk",
++    "glacier",
++    "kinesis",
++    "cloudtrail",
++    "waf"
++  ],
++  "scripts": {
++    "test": "npm -s run-script lint && npm -s run-script unit && npm -s run-script buildertest && npm -s run-script browsertest && npm -s run-script react-native-test && ([ -f configuration ] && npm -s run-script integration || true)",
++    "unit": "mocha -- test test/json test/model test/protocol test/query test/services test/signers test/xml test/s3 test/cloudfront test/dynamodb test/polly test/rds",
++    "coverage": "istanbul cover ./node_modules/mocha/bin/_mocha --reporter=lcovonly -- test test/json test/model test/protocol test/query test/services test/signers test/xml test/s3 test/cloudfront test/dynamodb test/polly test/rds",
++    "browsertest": "rake browser:test && karma start",
++    "buildertest": "mocha --compilers coffee:coffee-script -s 1000 -t 10000 dist-tools/test",
++    "integration": "cucumber.js",
++    "lint": "eslint lib dist-tools/*.js",
++    "console": "./scripts/console",
++    "testfiles": "istanbul `[ $COVERAGE ] && echo 'cover _mocha' || echo 'test mocha'`",
++    "tstest": "tsc -p ./ts",
++    "add-change": "node ./scripts/changelog/add-change.js",
++    "build-react-native-deps": "webpack --config dist-tools/webpack.config.rn-dep.js",
++    "build-react-native-core": "webpack --config dist-tools/webpack.config.rn-core.js",
++    "build-react-native-dist": "webpack --config dist-tools/webpack.config.rn.js",
++    "build-react-native": "npm -s run-script build-react-native-deps && npm -s run-script build-react-native-core && npm -s run-script build-react-native-dist",
++    "react-native-test": "npm -s run-script build-react-native && rake reactnative:test && karma start",
++    "region-check": "node ./scripts/region-checker/index.js"
++  }
++}
++""",
++
++        "webpack" : r"""{
++  "name": "webpack",
++  "version": "4.1.1",
++  "author": "Tobias Koppers @sokra",
++  "description": "Packs CommonJs/AMD modules for the browser. Allows to split your codebase into multiple bundles, which can be loaded on demand. Support loaders to preprocess files, i.e. json, jsx, es7, css, less, ... and your custom stuff.",
++  "license": "MIT",
++  "dependencies": {
++    "acorn": "^5.0.0",
++    "acorn-dynamic-import": "^3.0.0",
++    "ajv": "^6.1.0",
++    "ajv-keywords": "^3.1.0",
++    "chrome-trace-event": "^0.1.1",
++    "enhanced-resolve": "^4.0.0",
++    "eslint-scope": "^3.7.1",
++    "loader-runner": "^2.3.0",
++    "loader-utils": "^1.1.0",
++    "memory-fs": "~0.4.1",
++    "micromatch": "^3.1.8",
++    "mkdirp": "~0.5.0",
++    "neo-async": "^2.5.0",
++    "node-libs-browser": "^2.0.0",
++    "schema-utils": "^0.4.2",
++    "tapable": "^1.0.0",
++    "uglifyjs-webpack-plugin": "^1.1.1",
++    "watchpack": "^1.5.0",
++    "webpack-sources": "^1.0.1"
++  },
++  "devDependencies": {
++    "benchmark": "^2.1.1",
++    "bundle-loader": "~0.5.0",
++    "codacy-coverage": "^2.0.1",
++    "coffee-loader": "^0.9.0",
++    "coffeescript": "^1.10.0",
++    "coveralls": "^2.11.2",
++    "css-loader": "^0.28.3",
++    "es6-promise-polyfill": "^1.1.1",
++    "eslint": "^4.3.0",
++    "eslint-plugin-node": "^5.1.1",
++    "eslint-plugin-prettier": "^2.3.1",
++    "express": "~4.13.1",
++    "file-loader": "^1.1.6",
++    "glob": "^7.1.2",
++    "i18n-webpack-plugin": "^1.0.0",
++    "istanbul": "^0.4.5",
++    "jade": "^1.11.0",
++    "jade-loader": "~0.8.0",
++    "json-loader": "^0.5.7",
++    "less": "^2.5.1",
++    "less-loader": "^4.0.3",
++    "lodash": "^4.17.4",
++    "mocha": "^3.2.0",
++    "mocha-lcov-reporter": "^1.0.0",
++    "prettier": "^1.8.2",
++    "raw-loader": "~0.5.0",
++    "react": "^15.2.1",
++    "react-dom": "^15.2.1",
++    "rimraf": "^2.6.2",
++    "script-loader": "~0.7.0",
++    "should": "^11.1.1",
++    "simple-git": "^1.65.0",
++    "sinon": "^2.3.2",
++    "style-loader": "^0.19.1",
++    "url-loader": "^0.6.2",
++    "val-loader": "^1.0.2",
++    "vm-browserify": "~0.0.0",
++    "webpack-dev-middleware": "^1.9.0",
++    "worker-loader": "^1.1.0",
++    "xxhashjs": "^0.2.1"
++  },
++  "engines": {
++    "node": ">=6.11.5"
++  },
++  "repository": {
++    "type": "git",
++    "url": "https://github.com/webpack/webpack.git"
++  },
++  "homepage": "https://github.com/webpack/webpack",
++  "main": "lib/webpack.js",
++  "web": "lib/webpack.web.js",
++  "bin": "./bin/webpack.js",
++  "files": [
++    "lib/",
++    "bin/",
++    "buildin/",
++    "hot/",
++    "web_modules/",
++    "schemas/"
++  ],
++  "scripts": {
++    "test": "mocha test/*.test.js test/*.unittest.js --max-old-space-size=4096 --harmony --trace-deprecation",
++    "test:integration": "mocha test/*.test.js --max-old-space-size=4096 --harmony --trace-deprecation",
++    "test:unit": "mocha test/*.unittest.js --max-old-space-size=4096 --harmony --trace-deprecation",
++    "travis:integration": "npm run cover:init && npm run cover:integration && npm run cover:report-min",
++    "travis:unit": "npm run cover:init && npm run cover:unit && npm run cover:report-min",
++    "travis:lint": "npm run lint-files",
++    "travis:benchmark": "npm run benchmark",
++    "appveyor:integration": "npm run cover:init && npm run cover:integration && npm run cover:report-min",
++    "appveyor:unit": "npm run cover:init && npm run cover:unit && npm run cover:report-min",
++    "appveyor:benchmark": "npm run benchmark",
++    "circleci:test": "node node_modules/mocha/bin/mocha --max-old-space-size=4096 --harmony --trace-deprecation test/*.test.js test/*.unittest.js",
++    "circleci:lint": "npm run lint-files",
++    "build:examples": "cd examples && node buildAll.js",
++    "pretest": "npm run lint-files",
++    "lint-files": "npm run lint && npm run schema-lint",
++    "lint": "eslint lib bin hot buildin \"test/*.js\" \"test/**/webpack.config.js\" \"examples/**/webpack.config.js\" \"schemas/**/*.js\"",
++    "fix": "npm run lint -- --fix",
++    "pretty-files": "prettier \"lib/**.*\" \"bin/**.*\" \"hot/**.*\" \"buildin/**.*\" \"test/*.js\" \"test/**/webpack.config.js\" \"examples/**/webpack.config.js\" \"schemas/**/*.js\" --write",
++    "schema-lint": "mocha test/*.lint.js --opts test/lint-mocha.opts",
++    "benchmark": "mocha --max-old-space-size=4096 --harmony --trace-deprecation test/*.benchmark.js -R spec",
++    "cover": "npm run cover:init && npm run cover:all && npm run cover:report",
++    "cover:init": "rimraf coverage",
++    "cover:all": "node --max-old-space-size=4096 --harmony --trace-deprecation ./node_modules/istanbul/lib/cli.js cover --report none node_modules/mocha/bin/_mocha -- test/*.test.js test/*.unittest.js",
++    "cover:integration": "node --max-old-space-size=4096 --harmony --trace-deprecation ./node_modules/istanbul/lib/cli.js cover --report none node_modules/mocha/bin/_mocha -- test/*.test.js",
++    "cover:unit": "node --max-old-space-size=4096 --harmony --trace-deprecation ./node_modules/istanbul/lib/cli.js cover --report none node_modules/mocha/bin/_mocha -- test/*.unittest.js",
++    "cover:report": "istanbul report",
++    "cover:report-min": "istanbul report --report lcovonly",
++    "publish-patch": "npm run lint && mocha && npm version patch && git push && git push --tags && npm publish"
++  }
++}
++""",
++        "commander" : """{
++  "name": "commander",
++  "version": "2.15.0",
++  "description": "the complete solution for node.js command-line programs",
++  "keywords": [
++    "commander",
++    "command",
++    "option",
++    "parser"
++  ],
++  "author": "TJ Holowaychuk <tj@vision-media.ca>",
++  "license": "MIT",
++  "repository": {
++    "type": "git",
++    "url": "https://github.com/tj/commander.js.git"
++  },
++  "scripts": {
++    "lint": "eslint index.js",
++    "test": "make test && npm run test-typings",
++    "test-typings": "node_modules/typescript/bin/tsc -p tsconfig.json"
++  },
++  "main": "index",
++  "files": [
++    "index.js",
++    "typings/index.d.ts"
++  ],
++  "dependencies": {},
++  "devDependencies": {
++    "@types/node": "^7.0.55",
++    "eslint": "^3.19.0",
++    "should": "^11.2.1",
++    "sinon": "^2.4.1",
++    "standard": "^10.0.3",
++    "typescript": "^2.7.2"
++  },
++  "typings": "typings/index.d.ts"
++}
++"""
++}
+diff --git third_party/github.com/bazel_json/test/json_parse_tests.bzl third_party/github.com/bazel_json/test/json_parse_tests.bzl
+new file mode 100644
+index 0000000..441fa41
+--- /dev/null
++++ third_party/github.com/bazel_json/test/json_parse_tests.bzl
+@@ -0,0 +1,142 @@
++load("@bazel_skylib//:lib.bzl", "asserts", "unittest")
++load("//lib:json_parser.bzl", "json_parse")
++load(":json_parse_test_data.bzl", "get_pkg_jsons")
++
++
++def _valid_json_parse_test(ctx):
++    env = unittest.begin(ctx)
++
++    asserts.equals(env, json_parse('[]'), [])
++    asserts.equals(
++        env,
++        json_parse('["x", "y", 22, [7], {"z": 1, "y": null}]'),
++        ["x", "y", 22, [7], {"z" : 1, "y" : None}])
++    asserts.equals(
++        env,
++        " ".join(reversed(json_parse('["plain", "the", "on", "mainly", "falls", "spain", "in", "rain", "the"]'))),
++        "the rain in spain falls mainly on the plain",
++    )
++    asserts.equals(
++        env,
++        json_parse('["a", "b", "c", [1, 2, 3, [4], [5], [6]]]'),
++        ["a", "b", "c", [1, 2, 3, [4], [5], [6]]])
++    asserts.equals(env, json_parse('{}'), {})
++    asserts.equals(env, json_parse('{"a" : "b"}'), { "a" : "b" })
++    asserts.equals(
++        env,
++        json_parse('{"key1": [1, 2, ["nested"]], "key2": "val2", "key3": {"nested_key1" : [null, true, false]}}'),
++        {
++            "key1" : [1, 2, ["nested"]],
++            "key2" : "val2",
++            "key3" : {
++                "nested_key1" : [None, True, False]
++            }
++        })
++
++    asserts.equals(
++        env,
++        json_parse('{"key:with:colon" : [{ "nested:with:colon" : true }]}'),
++        { "key:with:colon" : [{ "nested:with:colon" : True }] },
++    )
++
++    expected_escapes = { "escaped" : r'\"quotes\"'}
++    # Ughh... need to double escape the escape.
++    asserts.equals(env, expected_escapes, json_parse('{"escaped" : "\\"quotes\\""}'))
++    # Unless it's a raw literal
++    asserts.equals(env, expected_escapes, json_parse(r'{"escaped" : "\"quotes\""}'))
++    asserts.equals(
++        env,
++        expected_escapes,
++        json_parse(r'''
++{"escaped" : "\"quotes\""}
++'''))
++
++    unittest.end(env)
++
++
++def _scalar_types_test(ctx):
++    env = unittest.begin(ctx)
++
++    asserts.equals(env, json_parse('[""]')[0], "")
++    asserts.equals(env, json_parse('["a string"]')[0], "a string")
++    asserts.equals(env, json_parse('[true]')[0], True)
++    asserts.equals(env, json_parse('[false]')[0], False)
++    asserts.equals(env, json_parse('[null]')[0], None)
++    asserts.equals(env, json_parse('[100]')[0], 100)
++    asserts.equals(env, json_parse('[-100]')[0], -100)
++
++    unittest.end(env)
++
++
++def _number_parse_test(ctx):
++    env = unittest.begin(ctx)
++
++    # :( this sucks, but technically it's legal JSON:
++    # https://tools.ietf.org/html/rfc8259#section-6
++    # "This specification allows implementations to set limits on the range
++    # and precision of numbers accepted."
++    asserts.equals(env, 2147483647, json_parse('[99e100]')[0]) # MAX int
++    asserts.equals(env, -2147483647, json_parse('[-99e100]')[0]) # MIN int
++    asserts.equals(env, 0, json_parse('[99e-10]')[0])
++    asserts.equals(env, 9, json_parse('[999e-2]')[0])
++
++    asserts.equals(env, 43, json_parse('[43.11]')[0])
++    asserts.equals(env, 0, json_parse('[0.12345]')[0])
++    asserts.equals(env, -120, json_parse('[-120.12345]')[0])
++
++    unittest.end(env)
++
++
++def _max_depth_json_parse_test(ctx):
++    env = unittest.begin(ctx)
++
++    asserts.equals(
++        env,
++        json_parse('[[[[[[[[[[[[[[[[[[[[20]]]]]]]]]]]]]]]]]]]]'),
++        [[[[[[[[[[[[[[[[[[[[20]]]]]]]]]]]]]]]]]]]]
++    )
++
++    asserts.equals(
++        env,
++        json_parse('[[["too_deep"]]]', fail_on_invalid = False, max_depth = 2),
++        None
++    )
++
++    unittest.end(env)
++
++
++def _package_json_parse_test(ctx):
++    env = unittest.begin(ctx)
++
++    pkg_jsons_for_testing = get_pkg_jsons()
++
++    # Use rollup to spot check specific values.
++    rollup_pkg_json = json_parse(pkg_jsons_for_testing["rollup"])
++    asserts.equals(env, "0.57.1", rollup_pkg_json["version"])
++    asserts.equals(env, "dist/rollup.browser.js", rollup_pkg_json["files"][0])
++    asserts.equals(env, "Oskar Segersvärd <victorystick@gmail.com>", rollup_pkg_json["contributors"][0])
++
++    for project in pkg_jsons_for_testing:
++        print("checking %s/package.json" % project)
++        parsed_pkg_json = json_parse(pkg_jsons_for_testing[project])
++        asserts.equals(env, "dict", type(parsed_pkg_json))
++
++    unittest.end(env)
++
++
++valid_json_parse_test = unittest.make(_valid_json_parse_test)
++scalar_types_test = unittest.make(_scalar_types_test)
++number_parse_test = unittest.make(_number_parse_test)
++max_depth_json_parse_test = unittest.make(_max_depth_json_parse_test)
++package_json_parse_test = unittest.make(_package_json_parse_test)
++
++def json_parse_test_suite():
++    """Creates the test targets and test suite for //lib:json_parse.bzl."""
++    unittest.suite(
++        "json_parse_tests",
++        valid_json_parse_test,
++        scalar_types_test,
++        number_parse_test,
++        max_depth_json_parse_test,
++        package_json_parse_test,
++    )
