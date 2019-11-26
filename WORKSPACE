@@ -12,31 +12,24 @@ http_archive(
 http_archive(
     name = "build_bazel_rules_nodejs",
     sha256 = "9901bc17138a79135048fb0c107ee7a56e91815ec6594c08cb9a17b80276d62b",
-    patches = ["//nodejs:yarn_install.patch"],
+    patches = ["//nodejs:pnp_install.patch"],
     urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.40.0/rules_nodejs-0.40.0.tar.gz"],
 )
-
 http_archive(
-    name = "build_bazel_rules_nodejs_yarn",
-    sha256 = "9901bc17138a79135048fb0c107ee7a56e91815ec6594c08cb9a17b80276d62b",
-    urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.40.0/rules_nodejs-0.40.0.tar.gz"],
+    name = "bazel_json",
+    sha256 = "a57a6f794943548fde6da8ec3edad88af89436e8102f33d8f6135202699847f4",
+    urls = ["https://github.com/erickj/bazel_json/archive/e954ef2c28cd92d97304810e8999e1141e2b5cc8.tar.gz"],
 )
-# 
-load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories")
-load("@build_bazel_rules_nodejs_yarn//:defs.bzl", "yarn_install")
-load("//nodejs:pnp_install.bzl", "pnp_install")
+ 
+load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories", "yarn_install")
 node_repositories(preserve_symlinks=False,)
+
+
+
+
 yarn_install(
-  name = "npm_yarn",
-  package_json = "//pnp:package.json",
-  yarn_lock = "//pnp:yarn.lock",
-  symlink_node_modules = False,
-)
-pnp_install(
   name = "npm_pnp",
   package_json = "//pnp:package.json",
   yarn_lock = "//pnp:yarn.lock",
   symlink_node_modules = False,
 )
-load("@npm_pnp//:defs.bzl", "pinned_yarn_install")
-pinned_yarn_install()

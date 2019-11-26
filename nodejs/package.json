@@ -1,6 +1,7 @@
 {
   "dependencies": {
-    "@yarnpkg/lockfile": "^1.1.0"
+    "@yarnpkg/lockfile": "^1.1.0",
+    "ts-node": "^8.5.2"
   },
   "devDependencies": {
     "@berry/pnpify": "^0.1.0",
