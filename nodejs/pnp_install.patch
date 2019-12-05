@@ -1,5 +1,5 @@
 diff --git internal/node/node.bzl internal/node/node.bzl
-index 2ffe835..2add202 100644
+index 2ffe835..3714977 100644
 --- internal/node/node.bzl
 +++ internal/node/node.bzl
 @@ -200,7 +200,7 @@ def _nodejs_binary_impl(ctx):
@@ -11,11 +11,10 @@ index 2ffe835..2add202 100644
      else:
          # Distribute the templated_args between the params file and the node options
          params = []
-@@ -225,7 +225,10 @@ def _nodejs_binary_impl(ctx):
-         node_tool_files.append(ctx.outputs.templated_args_file)
+@@ -226,6 +226,10 @@ def _nodejs_binary_impl(ctx):
  
      is_builtin = ctx.attr._node.label.workspace_name in ["nodejs_%s" % p for p in BUILT_IN_NODE_PLATFORMS]
--
+ 
 +    output_files = [ctx.outputs.loader]
 +    if ctx.file.pnp_file:
 +        templated_args.append("--pnp")
@@ -23,7 +22,7 @@ index 2ffe835..2add202 100644
      substitutions = {
          "TEMPLATED_args": " ".join([
              expand_location_into_runfiles(ctx, a)
-@@ -239,6 +242,7 @@ def _nodejs_binary_impl(ctx):
+@@ -239,6 +243,7 @@ def _nodejs_binary_impl(ctx):
          "TEMPLATED_repository_args": _to_manifest_path(ctx, ctx.file._repository_args),
          "TEMPLATED_script_path": _to_execroot_path(ctx, ctx.file.entry_point),
          "TEMPLATED_vendored_node": "" if is_builtin else strip_external(ctx.file._node.path),
@@ -31,15 +30,7 @@ index 2ffe835..2add202 100644
      }
      ctx.actions.expand_template(
          template = ctx.file._launcher_template,
-@@ -257,16 +261,14 @@ def _nodejs_binary_impl(ctx):
- 
-     # entry point is only needed in runfiles if it is a .js file
-     if ctx.file.entry_point.extension == "js":
--        runfiles = depset([ctx.file.entry_point], transitive = [runfiles])
-+        runfiles = depset([ctx.file.entry_point], transitive = [runfiles]) 
- 
-     return [
-         DefaultInfo(
+@@ -264,9 +269,7 @@ def _nodejs_binary_impl(ctx):
              executable = executable,
              runfiles = ctx.runfiles(
                  transitive_files = runfiles,
@@ -50,7 +41,7 @@ index 2ffe835..2add202 100644
  
                          # We need this call to the list of Files.
                          # Calling the .to_list() method may have some perfs hits,
-@@ -511,7 +513,12 @@ _NODEJS_EXECUTABLE_OUTPUTS = {
+@@ -511,7 +514,12 @@ _NODEJS_EXECUTABLE_OUTPUTS = {
  # and duplicate the definitions to give two distinct symbols.
  nodejs_binary = rule(
      implementation = _nodejs_binary_impl,
@@ -90,10 +81,10 @@ index 7272a62..dbd4bae 100644
  done
 diff --git internal/npm_install/generate_pnp_build_files.js internal/npm_install/generate_pnp_build_files.js
 new file mode 100644
-index 0000000..d036135
+index 0000000..9d87299
 --- /dev/null
 +++ internal/npm_install/generate_pnp_build_files.js
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,180 @@
 +"use strict";
 +var __importStar = (this && this.__importStar) || function (mod) {
 +    if (mod && mod.__esModule) return mod;
@@ -104,39 +95,174 @@ index 0000000..d036135
 +};
 +Object.defineProperty(exports, "__esModule", { value: true });
 +const fs_1 = require("fs");
++const fs = __importStar(require("fs"));
 +const path = __importStar(require("path"));
++function findVersion(packageName, yarnLock) {
++    packageName = packageName.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
++    const regex = new RegExp(`(?<="?${packageName}@.*"?:\\n\\s+version\\s)"\\d+.\\d+.\\d+"`);
++    const result = yarnLock.match(regex);
++    return result ? result[0].replace(/"/g, "") : null;
++}
 +async function writeFile(p, content) {
 +    await fs_1.promises.mkdir(path.dirname(p), { recursive: true });
 +    return fs_1.promises.writeFile(p, content);
 +}
-+function createBuildFile(packagePath) {
-+    const contents = `package(default_visibility = ["//visibility:public"])
-+load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
++/**
++ * Checks if a path is an npm package which is is a directory with a package.json file.
++ */
++function isDirectory(p) {
++    return fs.existsSync(p) && fs.statSync(p).isDirectory();
++}
++function listFiles(rootDir, subDir = '') {
++    const dir = path.posix.join(rootDir, subDir);
++    if (!isDirectory(dir)) {
++        return [];
++    }
++    return fs.readdirSync(dir)
++        .reduce((files, file) => {
++        const fullPath = path.posix.join(dir, file);
++        const relPath = path.posix.join(subDir, file);
++        const isSymbolicLink = fs.lstatSync(fullPath).isSymbolicLink();
++        let stat;
++        try {
++            stat = fs.statSync(fullPath);
++        }
++        catch (e) {
++            if (isSymbolicLink) {
++                // Filter out broken symbolic links. These cause fs.statSync(fullPath)
++                // to fail with `ENOENT: no such file or directory ...`
++                return files;
++            }
++            throw e;
++        }
++        const isDirectory = stat.isDirectory();
++        if (isDirectory && isSymbolicLink) {
++            // Filter out symbolic links to directories. An issue in yarn versions
++            // older than 1.12.1 creates symbolic links to folders in the .bin folder
++            // which leads to Bazel targets that cross package boundaries.
++            // See https://github.com/bazelbuild/rules_nodejs/issues/428 and
++            // https://github.com/bazelbuild/rules_nodejs/issues/438.
++            // This is tested in /e2e/fine_grained_symlinks.
++            return files;
++        }
++        return isDirectory ? files.concat(listFiles(rootDir, relPath)) : files.concat(relPath);
++    }, [])
++        // Files with spaces (\x20) or unicode characters (<\x20 && >\x7E) are not allowed in
++        // Bazel runfiles. See https://github.com/bazelbuild/bazel/issues/4327
++        .filter((f) => !/[^\x21-\x7E]/.test(f))
++        // We return a sorted array so that the order of files
++        // is the same regardless of platform
++        .sort();
++}
++function addPackageToDefs(pkg, location, stream) {
++    stream.write(`  native.new_local_repository(
++    name = "${pkg.replace(/-/g, "_")}",
++    path = "${location}",
++    build_file_content = """package(default_visibility = ["//visibility:public"])
++filegroup(
++name = "${pkg}_files",
++srcs = glob(["*"])
++)
++""",
++)\n`);
++}
++function createBinBuildFile(packageName, packagePath) {
++    let contents = '';
++    const bins = Object.keys(require(path.join(packagePath.packageLocation, "package.json")).bin);
++    contents = `load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
++
++`;
++    bins.forEach(bin => {
++        const data = [`//${packageName.replace(/-/g, "_")}:${packageName}`];
++        contents += `# Wire up the \`bin\` entry \`${packageName}\`
++      nodejs_binary(
++          name = "${packageName}",
++          entry_point = "@${packageName.replace(/-/g, "_")}//${bin}",
++          install_source_map_support = False,
++          data = [${data.map(p => `"${p}"`).join(', ')}],
++      )
++  `;
++    });
++    return writeFile(`${packageName}/bin/BUILD.bazel`, contents);
++}
++function createBuildFile(packageName, packagePath) {
++    const sources = listFiles(packagePath.packageLocation);
++    let srcsStarlark = '';
++    if (sources.length) {
++        srcsStarlark = `
++    # ${packagePath.packageLocation}
++    srcs = [
++        ${sources.map((f) => `"@${packageName.replace(/-/g, "_")}//:${f}",`).join('\n')}
++    ],`;
++    }
++    let contents = `load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
 +
 +filegroup(
-+    name = "${packagePath}",
++name = "${packageName}__files",${srcsStarlark}
++)
++
++node_module_library(
++name = "${packageName}",
++# direct sources listed for strict deps support
++srcs = [":${packageName}__files"],
++)
++`;
++    return writeFile(`${packageName}/BUILD.bazel`, contents);
++}
++function createDummyBuildFile(packageName) {
++    const contents = `package(default_visibility = ["//visibility:public"])
++load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
++  
++filegroup(
++    name = "${packageName}",
 +    srcs = [] # we dont care about the actual content, we want a list of dependencies to modify the pnp file around
 +)
 +`;
-+    return writeFile(`${packagePath}/BUILD.bazel`, contents);
++    return writeFile(`${packageName}/BUILD.bazel`, contents);
++}
++function processPackage(packageName, metadata, stream) {
++    const version = findVersion(packageName, metadata.yarnLock);
++    if (!version) {
++        console.log(`could not find version for package ${packageName}`);
++        return Promise.resolve();
++    }
++    const packagePath = metadata.pnpFile.getPackageInformation({
++        name: packageName,
++        reference: version
++    });
++    const bin = require(path.join(packagePath.packageLocation, "package.json")).bin;
++    if (bin) {
++        addPackageToDefs(packageName, packagePath.packageLocation, stream);
++        createBuildFile(packageName, packagePath);
++        return createBinBuildFile(packageName, packagePath);
++    }
++    return createDummyBuildFile(packageName);
 +}
 +async function main(workspacePath) {
++    const stream = fs_1.createWriteStream("./defs.bzl");
++    stream.write("def pinned_yarn_install():\n");
 +    const contents = `package(default_visibility = ["//visibility:public"])
 +exports_files([
 +    ".pnp.js",
 +    "package.json",
 +])`;
-+    const packageJson = require(path.join(workspacePath, "package.json"));
++    const yarnLock = await fs_1.promises.readFile(path.join(workspacePath, "yarn.lock"), "utf-8");
++    const packageNameJson = require(path.join(workspacePath, "package.json"));
++    const metadata = {
++        path: workspacePath,
++        yarnLock,
++        pnpFile: require(path.join(workspacePath, ".pnp.js"))
++    };
 +    await Promise.all([
 +        "dependencies",
 +        "devDependencies",
 +        "peerDependencies",
 +        "optionalDependencies"
 +    ].map(d => {
-+        return Promise.all(Object.keys(packageJson[d] || {})
-+            .map(createBuildFile)
++        return Promise.all(Object.keys(packageNameJson[d] || {}).map((packageName) => processPackage(packageName, metadata, stream))
 +            .concat([writeFile("BUILD.bazel", contents)]));
 +    }));
++    stream.close();
 +}
 +main(process.argv[2]);
 diff --git internal/npm_install/generate_pnp_build_files.ts internal/npm_install/generate_pnp_build_files.ts
@@ -191,26 +317,31 @@ index 0000000..13d494a
 +
 +main(process.argv[2]);
 diff --git internal/npm_install/npm_install.bzl internal/npm_install/npm_install.bzl
-index 9fe884d..57b0452 100644
+index 1273635..f0f699d 100644
 --- internal/npm_install/npm_install.bzl
 +++ internal/npm_install/npm_install.bzl
-@@ -24,7 +24,7 @@ See discussion in the README.
+@@ -24,6 +24,7 @@ See discussion in the README.
  load("//internal/common:check_bazel_version.bzl", "check_bazel_version")
  load("//internal/common:os_name.bzl", "is_windows_os")
  load("//internal/node:node_labels.bzl", "get_node_label", "get_npm_label", "get_yarn_label")
--
 +load("//third_party/github.com/bazel_json/lib:json_parser.bzl", "json_parse")
+ 
  COMMON_ATTRIBUTES = dict(dict(), **{
      "always_hide_bazel_files": attr.bool(
-         doc = """Always hide Bazel build files such as `BUILD` and BUILD.bazel` by prefixing them with `_`.
-@@ -130,6 +130,33 @@ data attribute.
-         default = True,
-     ),
+@@ -132,14 +133,32 @@ data attribute.
  })
-+YARN_ENVIRONMENT = [
+ 
+ YARN_ENVIRONMENT = [
+-    "CC",
+-    "CFLAGS",
+-    "CXX",
+-    "CXXFLAGS",
+-    "JAVA_HOME",
+-    "LDFLAGS",
+-    "PATH",
 +
-+]
-+def _process_pnp_file(repository_ctx, node,workspace_path):
+ ]
++def _process_pnp_file(repository_ctx, node, workspace_path):
 +    repository_ctx.report_progress("Processing PNP file: Patching module directory")
 +    result = repository_ctx.execute([
 +        node,
@@ -237,13 +368,12 @@ index 9fe884d..57b0452 100644
  
  def _create_build_files(repository_ctx, rule_type, node, lock_file):
      error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
-@@ -155,17 +182,25 @@ def _add_scripts(repository_ctx):
+@@ -165,13 +184,21 @@ def _add_scripts(repository_ctx):
          repository_ctx.path(Label("//internal/npm_install:pre_process_package_json.js")),
          {},
      )
 -
--    repository_ctx.template(
-+    repository_ctx.template( 
+     repository_ctx.template(
          "generate_build_file.js",
          repository_ctx.path(Label("//internal/npm_install:generate_build_file.js")),
          {},
@@ -261,12 +391,7 @@ index 9fe884d..57b0452 100644
  def _add_package_json(repository_ctx):
      repository_ctx.symlink(
          repository_ctx.attr.package_json,
--        repository_ctx.path("package.json"),
-+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
-     )
- 
- def _add_data_dependencies(repository_ctx):
-@@ -267,6 +302,7 @@ cd "{root}" && "{npm}" {npm_args}
+@@ -277,6 +304,7 @@ cd "{root}" && "{npm}" {npm_args}
      )
      if result.return_code:
          fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
@@ -274,7 +399,7 @@ index 9fe884d..57b0452 100644
  
      repository_ctx.report_progress("Running npm install on %s" % repository_ctx.attr.package_json)
      result = repository_ctx.execute(
-@@ -292,8 +328,13 @@ cd "{root}" && "{npm}" {npm_args}
+@@ -302,8 +330,13 @@ cd "{root}" && "{npm}" {npm_args}
  
      if repository_ctx.attr.symlink_node_modules:
          _symlink_node_modules(repository_ctx)
@@ -289,88 +414,97 @@ index 9fe884d..57b0452 100644
  
  npm_install = repository_rule(
      attrs = dict(COMMON_ATTRIBUTES, **{
-@@ -325,12 +366,12 @@ def _yarn_install_impl(repository_ctx):
-     if repository_ctx.attr.symlink_node_modules:
-         root = repository_ctx.path(repository_ctx.attr.package_json).dirname
-     else:
--        root = repository_ctx.path("")
-+        root = repository_ctx.path(repository_ctx.attr.package_json.package)
- 
-     if not repository_ctx.attr.symlink_node_modules:
-         repository_ctx.symlink(
-             repository_ctx.attr.yarn_lock,
--            repository_ctx.path("yarn.lock"),
-+            repository_ctx.path(repository_ctx.attr.yarn_lock.package + "/yarn.lock"),
-         )
-         _add_package_json(repository_ctx)
+@@ -346,13 +379,14 @@ def _yarn_install_impl(repository_ctx):
          _add_data_dependencies(repository_ctx)
-@@ -343,6 +384,25 @@ def _yarn_install_impl(repository_ctx):
+ 
+     _add_scripts(repository_ctx)
+-
+     result = repository_ctx.execute(
+         [node, "pre_process_package_json.js", repository_ctx.path(repository_ctx.attr.package_json), "yarn"],
+         quiet = repository_ctx.attr.quiet,
      )
      if result.return_code:
          fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
 +    is_pnp = json_parse(result.stdout)["pnp"]
-+    result = repository_ctx.execute([
-+        "sed",
-+        "-i",
-+        "-e",
-+        "/^ *\"preinstall\".*$/d",
-+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
-+    ])
-+    if result.return_code:
-+        fail("deleting preinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
-+    result = repository_ctx.execute([
-+        "sed",
-+        "-i",
-+        "-e",
-+        "/^ *\"postinstall\".*$/d",
-+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
-+    ])
-+    if result.return_code:
-+        fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
- 
++
+     result = repository_ctx.execute([
+         "sed",
+         "-i",
+@@ -371,7 +405,6 @@ def _yarn_install_impl(repository_ctx):
+     ])
+     if result.return_code:
+         fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+-
      args = [
          repository_ctx.path(yarn),
-@@ -350,6 +410,8 @@ def _yarn_install_impl(repository_ctx):
-         root,
-         "--network-timeout",
-         str(repository_ctx.attr.network_timeout * 1000),  # in ms
-+        "--modules-folder",
-+        repository_ctx.path("node_modules"),
-     ]
- 
-     if repository_ctx.attr.frozen_lockfile:
-@@ -371,6 +433,7 @@ def _yarn_install_impl(repository_ctx):
-     repository_ctx.report_progress("Running yarn install on %s" % repository_ctx.attr.package_json)
-     result = repository_ctx.execute(
-         args,
-+        environment = {k: repository_ctx.os.environ[k] for k in YARN_ENVIRONMENT},
-         timeout = repository_ctx.attr.timeout,
-         quiet = repository_ctx.attr.quiet,
-     )
-@@ -379,8 +442,13 @@ def _yarn_install_impl(repository_ctx):
+         "--cwd",
+@@ -410,34 +443,38 @@ def _yarn_install_impl(repository_ctx):
  
      if repository_ctx.attr.symlink_node_modules:
          _symlink_node_modules(repository_ctx)
+-    result = repository_ctx.execute([
+-        "find",
+-        repository_ctx.path("node_modules"),
+-        "-type",
+-        "f",
+-        "-name",
+-        "*.pyc",
+-        "-delete",
+-    ])
+-    if result.return_code:
+-        fail("deleting .pyc files failed: %s (%s)" % (result.stdout, result.stderr))
+-    result = repository_ctx.execute([
+-        "find",
+-        repository_ctx.path("node_modules"),
+-        "-type",
+-        "f",
+-        "-name",
+-        "*.node",
+-        "-exec",
+-        "strip",
+-        "-S",
+-        "{}",
+-        ";",
+-    ])
+-    if result.return_code:
+-        fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
 -
 -    _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
 +    if is_pnp:
 +        repository_ctx.report_progress("Processing PnP workspace")
-+        _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
-+        _create_pnp_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
++        _process_pnp_file(repository_ctx, node, root)
++        _create_pnp_build_files(repository_ctx, "pnp_install", node, root)
 +    else:
-+        repository_ctx.report_progress("Processing node modules workspace")
++        result = repository_ctx.execute([
++            "find",
++            repository_ctx.path("node_modules"),
++            "-type",
++            "f",
++            "-name",
++            "*.pyc",
++            "-delete",
++        ])
++        if result.return_code:
++            fail("deleting .pyc files failed: %s (%s)" % (result.stdout, result.stderr))
++        result = repository_ctx.execute([
++            "find",
++            repository_ctx.path("node_modules"),
++            "-type",
++            "f",
++            "-name",
++            "*.node",
++            "-exec",
++            "strip",
++            "-S",
++            "{}",
++            ";",
++        ])
++        if result.return_code:
++            fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
 +        _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
  
  yarn_install = repository_rule(
      attrs = dict(COMMON_ATTRIBUTES, **{
-@@ -420,4 +488,5 @@ cache_directory.
-     }),
-     doc = "Runs yarn install during workspace setup.",
-     implementation = _yarn_install_impl,
--)
-+    environ = YARN_ENVIRONMENT,
-+)
-\ No newline at end of file
 diff --git internal/npm_install/pre_process_package_json.js internal/npm_install/pre_process_package_json.js
 index e0c704d..43b6dfb 100644
 --- internal/npm_install/pre_process_package_json.js

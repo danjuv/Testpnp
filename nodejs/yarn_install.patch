@@ -1,64 +1,124 @@
-diff --git internal/node/node.bzl internal/node/node.bzl
-index dba72ae..d76b6a6 100644
---- internal/node/node.bzl
-+++ internal/node/node.bzl
-@@ -230,6 +230,7 @@ def _nodejs_binary_impl(ctx):
-         "TEMPLATED_repository_args": _to_manifest_path(ctx, ctx.file._repository_args),
-         "TEMPLATED_script_path": _to_execroot_path(ctx, ctx.file.entry_point),
-         "TEMPLATED_vendored_node": "" if is_builtin else strip_external(ctx.file._node.path),
-+        "TEMPLATED_pnp_file": _to_manifest_path(ctx, ctx.file.pnp_file),
-     }
-     ctx.actions.expand_template(
-         template = ctx.file._launcher_template,
-@@ -501,7 +502,12 @@ _NODEJS_EXECUTABLE_OUTPUTS = {
- # and duplicate the definitions to give two distinct symbols.
- nodejs_binary = rule(
-     implementation = _nodejs_binary_impl,
--    attrs = _NODEJS_EXECUTABLE_ATTRS,
-+    attrs = dict(_NODEJS_EXECUTABLE_ATTRS, **{
-+        "pnp_file": attr.label(
-+            mandatory = False,
-+            allow_single_file = True,
-+            ),
-+        }),
-     doc = "Runs some JavaScript code in NodeJS.",
-     executable = True,
-     outputs = _NODEJS_EXECUTABLE_OUTPUTS,
-diff --git internal/node/node_launcher.sh internal/node/node_launcher.sh
-index 7272a62..7be7578 100644
---- internal/node/node_launcher.sh
-+++ internal/node/node_launcher.sh
-@@ -162,7 +162,7 @@ readonly repository_args=$(rlocation "TEMPLATED_repository_args")
- MAIN=$(rlocation "TEMPLATED_loader_path")
- readonly link_modules_script=$(rlocation "TEMPLATED_link_modules_script")
- bazel_require_script=$(rlocation "TEMPLATED_bazel_require_script")
--
-+pnp_file=$(rlocation "TEMPLATED_pnp_file")
- # Node's --require option assumes that a non-absolute path not starting with `.` is
- # a module, so that you can do --require=source-map-support/register
- # So if the require script is not absolute, we must make it so
-@@ -178,14 +178,13 @@ esac
- source $repository_args
+--- internal/npm_install/npm_install.bzl
++++ internal/npm_install/npm_install.bzl
+@@ -151,6 +151,16 @@ data attribute.
+     ),
+ })
  
- ARGS=()
--NODE_OPTIONS=()
-+NODE_OPTIONS=("--require" "${pnp_file}")
- ALL_ARGS=(TEMPLATED_args $NODE_REPOSITORY_ARGS "$@")
- for ARG in "${ALL_ARGS[@]}"; do
-   case "$ARG" in
-     --bazel_node_modules_manifest=*) MODULES_MANIFEST="${ARG#--bazel_node_modules_manifest=}" ;;
-     --nobazel_patch_module_resolver)
-       MAIN="TEMPLATED_script_path"
--      NODE_OPTIONS+=( "--require" "$bazel_require_script" )
-       ;;
-     --node_options=*) NODE_OPTIONS+=( "${ARG#--node_options=}" ) ;;
-     *) ARGS+=( "$ARG" )
-@@ -207,7 +206,7 @@ if [ "${EXPECTED_EXIT_CODE}" -eq "0" ]; then
-   # handled by the node process.
-   # If we had merely forked a child process here, we'd be responsible
-   # for forwarding those OS interactions.
--  exec "${node}" "${NODE_OPTIONS[@]}" "${MAIN}" "${ARGS[@]}"
-+  exec "${node}" "${ARGS[@]}" "${NODE_OPTIONS[@]}" "$(pwd)/TEMPLATED_script_path"
-   # exec terminates execution of this shell script, nothing later will run.
- fi
++YARN_ENVIRONMENT = [
++    "CC",
++    "CFLAGS",
++    "CXX",
++    "CXXFLAGS",
++    "JAVA_HOME",
++    "LDFLAGS",
++    "PATH",
++]
++
+ def _create_build_files(repository_ctx, rule_type, node, lock_file):
+     error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
  
+@@ -186,7 +196,7 @@ def _add_scripts(repository_ctx):
+ def _add_package_json(repository_ctx):
+     repository_ctx.symlink(
+         repository_ctx.attr.package_json,
+-        repository_ctx.path("package.json"),
++        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
+     )
+ 
+ def _add_data_dependencies(repository_ctx):
+@@ -346,12 +356,12 @@ def _yarn_install_impl(repository_ctx):
+     if repository_ctx.attr.symlink_node_modules:
+         root = repository_ctx.path(repository_ctx.attr.package_json).dirname
+     else:
+-        root = repository_ctx.path("")
++        root = repository_ctx.path(repository_ctx.attr.package_json.package)
+ 
+     if not repository_ctx.attr.symlink_node_modules:
+         repository_ctx.symlink(
+             repository_ctx.attr.yarn_lock,
+-            repository_ctx.path("yarn.lock"),
++            repository_ctx.path(repository_ctx.attr.yarn_lock.package + "/yarn.lock"),
+         )
+         _add_package_json(repository_ctx)
+         _add_data_dependencies(repository_ctx)
+@@ -364,6 +374,24 @@ def _yarn_install_impl(repository_ctx):
+     )
+     if result.return_code:
+         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
++    result = repository_ctx.execute([
++        "sed",
++        "-i",
++        "-e",
++        "/^ *\"preinstall\".*$/d",
++        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
++    ])
++    if result.return_code:
++        fail("deleting preinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
++    result = repository_ctx.execute([
++        "sed",
++        "-i",
++        "-e",
++        "/^ *\"postinstall\".*$/d",
++        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
++    ])
++    if result.return_code:
++        fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+ 
+     args = [
+         repository_ctx.path(yarn),
+@@ -371,6 +399,8 @@ def _yarn_install_impl(repository_ctx):
+         root,
+         "--network-timeout",
+         str(repository_ctx.attr.network_timeout * 1000),  # in ms
++        "--modules-folder",
++        repository_ctx.path("node_modules"),
+     ]
+ 
+     if repository_ctx.attr.frozen_lockfile:
+@@ -392,6 +422,7 @@ def _yarn_install_impl(repository_ctx):
+     repository_ctx.report_progress("Running yarn install on %s" % repository_ctx.attr.package_json)
+     result = repository_ctx.execute(
+         args,
++        environment = {k: repository_ctx.os.environ[k] for k in YARN_ENVIRONMENT},
+         timeout = repository_ctx.attr.timeout,
+         quiet = repository_ctx.attr.quiet,
+     )
+@@ -400,6 +431,32 @@ def _yarn_install_impl(repository_ctx):
+ 
+     if repository_ctx.attr.symlink_node_modules:
+         _symlink_node_modules(repository_ctx)
++    result = repository_ctx.execute([
++        "find",
++        repository_ctx.path("node_modules"),
++        "-type",
++        "f",
++        "-name",
++        "*.pyc",
++        "-delete",
++    ])
++    if result.return_code:
++        fail("deleting .pyc files failed: %s (%s)" % (result.stdout, result.stderr))
++    result = repository_ctx.execute([
++        "find",
++        repository_ctx.path("node_modules"),
++        "-type",
++        "f",
++        "-name",
++        "*.node",
++        "-exec",
++        "strip",
++        "-S",
++        "{}",
++        ";",
++    ])
++    if result.return_code:
++        fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
+ 
+     _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
+ 
+@@ -441,4 +498,5 @@ cache_directory.
+     }),
+     doc = "Runs yarn install during workspace setup.",
+     implementation = _yarn_install_impl,
++    environ = YARN_ENVIRONMENT,
+ )

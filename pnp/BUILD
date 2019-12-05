@@ -11,7 +11,8 @@ nodejs_binary(
         "@npm_pnp//is-number",
         "@npm_pnp//is-buffer",
         "@npm_pnp//nock",
-        "@npm_pnp//closure-compiler"
+        "@npm_pnp//closure-compiler",
+        "@npm_pnp//browserify"
     ],
     pnp_file = "@npm_pnp//:.pnp.js"
 )

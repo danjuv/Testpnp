@@ -11,9 +11,9 @@ http_archive(
 
 http_archive(
     name = "build_bazel_rules_nodejs",
-    sha256 = "9901bc17138a79135048fb0c107ee7a56e91815ec6594c08cb9a17b80276d62b",
-    patches = ["//nodejs:pnp_install.patch"],
-    urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.40.0/rules_nodejs-0.40.0.tar.gz"],
+    patches = ["//nodejs:yarn_install.patch", "//nodejs:pnp_install.patch"],
+    sha256 = "c612d6b76eaa17540e8b8c806e02701ed38891460f9ba3303f4424615437887a",
+    urls = ["https://github.com/bazelbuild/rules_nodejs/releases/download/0.42.1/rules_nodejs-0.42.1.tar.gz"],
 )
 http_archive(
     name = "bazel_json",
@@ -23,6 +23,7 @@ http_archive(
  
 load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories", "yarn_install")
 node_repositories(preserve_symlinks=False,)
+
 
 
 

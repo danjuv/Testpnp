@@ -4,10 +4,11 @@
   "main": "index.js",
   "license": "MIT",
   "dependencies": {
+    "browserify": "^16.5.0",
+    "closure-compiler": "0.2.x",
     "is-buffer": "^2.0.4",
     "is-number": "^7.0.0",
-    "nock": "^10.0.6",
-    "closure-compiler": "0.2.x"
+    "nock": "^10.0.6"
   },
   "installConfig": {
     "pnp": true
