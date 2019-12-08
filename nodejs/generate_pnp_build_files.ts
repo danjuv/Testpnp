@@ -39,104 +39,114 @@ function isDirectory(p: string) {
   return fs.existsSync(p) && fs.statSync(p).isDirectory();
 }
 
-function listFiles(rootDir: string, subDir: string = ''): string[] {
+function listFiles(rootDir: string, subDir: string = ""): string[] {
   const dir = path.posix.join(rootDir, subDir);
   if (!isDirectory(dir)) {
     return [];
   }
-  return fs.readdirSync(dir)
-      .reduce(
-          (files: string[], file: string) => {
-            const fullPath = path.posix.join(dir, file);
-            const relPath = path.posix.join(subDir, file);
-            const isSymbolicLink = fs.lstatSync(fullPath).isSymbolicLink();
-            let stat;
-            try {
-              stat = fs.statSync(fullPath);
-            } catch (e) {
-              if (isSymbolicLink) {
-                // Filter out broken symbolic links. These cause fs.statSync(fullPath)
-                // to fail with `ENOENT: no such file or directory ...`
-                return files;
-              }
-              throw e;
-            }
-            const isDirectory = stat.isDirectory();
-            if (isDirectory && isSymbolicLink) {
-              // Filter out symbolic links to directories. An issue in yarn versions
-              // older than 1.12.1 creates symbolic links to folders in the .bin folder
-              // which leads to Bazel targets that cross package boundaries.
-              // See https://github.com/bazelbuild/rules_nodejs/issues/428 and
-              // https://github.com/bazelbuild/rules_nodejs/issues/438.
-              // This is tested in /e2e/fine_grained_symlinks.
-              return files;
-            }
-            return isDirectory ? files.concat(listFiles(rootDir, relPath)) : files.concat(relPath);
-          },
-          [])
+  return (
+    fs
+      .readdirSync(dir)
+      .reduce((files: string[], file: string) => {
+        const fullPath = path.posix.join(dir, file);
+        const relPath = path.posix.join(subDir, file);
+        const isSymbolicLink = fs.lstatSync(fullPath).isSymbolicLink();
+        let stat;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch (e) {
+          if (isSymbolicLink) {
+            // Filter out broken symbolic links. These cause fs.statSync(fullPath)
+            // to fail with `ENOENT: no such file or directory ...`
+            return files;
+          }
+          throw e;
+        }
+        const isDirectory = stat.isDirectory();
+        if (isDirectory && isSymbolicLink) {
+          // Filter out symbolic links to directories. An issue in yarn versions
+          // older than 1.12.1 creates symbolic links to folders in the .bin folder
+          // which leads to Bazel targets that cross package boundaries.
+          // See https://github.com/bazelbuild/rules_nodejs/issues/428 and
+          // https://github.com/bazelbuild/rules_nodejs/issues/438.
+          // This is tested in /e2e/fine_grained_symlinks.
+          return files;
+        }
+        return isDirectory
+          ? files.concat(listFiles(rootDir, relPath))
+          : files.concat(relPath);
+      }, [])
       // Files with spaces (\x20) or unicode characters (<\x20 && >\x7E) are not allowed in
       // Bazel runfiles. See https://github.com/bazelbuild/bazel/issues/4327
       .filter((f: any) => !/[^\x21-\x7E]/.test(f))
       // We return a sorted array so that the order of files
       // is the same regardless of platform
-      .sort();
+      .sort()
+  );
 }
 
 function addPackageToDefs(
-  pkg: string,
+  packageName: string,
   location: string,
   stream: WriteStream
 ) {
+  const sources = listFiles(location);
   stream.write(`  native.new_local_repository(
-    name = "${pkg.replace(/-/g, "_")}",
+    name = "${packageName.replace(/-/g, "_")}",
     path = "${location}",
     build_file_content = """package(default_visibility = ["//visibility:public"])
 filegroup(
-name = "${pkg}_files",
-srcs = glob(["*"])
-)
+name = "${packageName}_files",
+srcs = [
+  ${sources.map((f: string) => `"${f}",`).join("\n")}
+]
+
 """,
 )\n`);
 }
 
-
-
-function createBinBuildFile(packageName: string, packagePath: PackageInformation) {
-  let contents = '';
-  const bins = Object.keys(require(path.join(packagePath.packageLocation,"package.json")).bin)
+function createBinBuildFile(
+  packageName: string,
+  packagePath: PackageInformation
+) {
+  let contents = "";
+  const bins = Object.keys(
+    require(path.join(packagePath.packageLocation, "package.json")).bin
+  );
   contents = `load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
 
 `;
-    bins.forEach(bin => {
-      const data = [`//${packageName.replace(/-/g, "_")}:${packageName}`];
+  bins.forEach(bin => {
+    const data = [`//${packageName.replace(/-/g, "_")}:${packageName}`];
 
-      contents += `# Wire up the \`bin\` entry \`${packageName}\`
+    contents += `# Wire up the \`bin\` entry \`${packageName}\`
       nodejs_binary(
           name = "${packageName}",
           entry_point = "@${packageName.replace(/-/g, "_")}//${bin}",
           install_source_map_support = False,
-          data = [${data.map(p => `"${p}"`).join(', ')}],
+          data = [${data.map(p => `"${p}"`).join(", ")}],
       )
-  `
-    })
-  
+  `;
+  });
 
   return writeFile(`${packageName}/bin/BUILD.bazel`, contents);
 }
 
 function createBuildFile(packageName: string, packagePath: PackageInformation) {
-  const sources = listFiles(packagePath.packageLocation)
-  let srcsStarlark = '';
+  const sources = listFiles(packagePath.packageLocation);
+  sourceFiles = sourceFiles.concat(sources)
+  let srcsStarlark = "";
   if (sources.length) {
     srcsStarlark = `
     # ${packagePath.packageLocation}
     srcs = [
-        ${sources.map((f: string) => `"@${packageName.replace(/-/g, "_")}//:${f}",`).join('\n')}
+        ${sources
+          .map((f: string) => `"@${packageName.replace(/-/g, "_")}//:${f}",`)
+          .join("\n")}
     ],`;
   }
 
-  let contents =
-  `load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
+  let contents = `load("@build_bazel_rules_nodejs//internal/npm_install:node_module_library.bzl", "node_module_library")
 
 filegroup(
 name = "${packageName}__files",${srcsStarlark}
@@ -148,7 +158,7 @@ name = "${packageName}",
 srcs = [":${packageName}__files"],
 )
 `;
-return writeFile(`${packageName}/BUILD.bazel`, contents);
+  return writeFile(`${packageName}/BUILD.bazel`, contents);
 }
 
 function createDummyBuildFile(packageName: string) {
@@ -160,11 +170,15 @@ filegroup(
     srcs = [] # we dont care about the actual content, we want a list of dependencies to modify the pnp file around
 )
 `;
-  
-    return writeFile(`${packageName}/BUILD.bazel`, contents);
+
+  return writeFile(`${packageName}/BUILD.bazel`, contents);
 }
 
-function processPackage(packageName: string, metadata: WorkspaceMetaData, stream: WriteStream) {
+function processPackage(
+  packageName: string,
+  metadata: WorkspaceMetaData,
+  stream: WriteStream
+) {
   const version = findVersion(packageName, metadata.yarnLock);
   if (!version) {
     console.log(`could not find version for package ${packageName}`);
@@ -174,24 +188,21 @@ function processPackage(packageName: string, metadata: WorkspaceMetaData, stream
     name: packageName,
     reference: version
   });
-  const bin = require(path.join(packagePath.packageLocation, "package.json")).bin;
+  const bin = require(path.join(packagePath.packageLocation, "package.json"))
+    .bin;
   if (bin) {
-    addPackageToDefs(packageName, packagePath.packageLocation, stream)
-    createBuildFile(packageName, packagePath)
+    addPackageToDefs(packageName, packagePath.packageLocation, stream);
+    createBuildFile(packageName, packagePath);
     return createBinBuildFile(packageName, packagePath);
   }
   return createDummyBuildFile(packageName);
 }
 
+let sourceFiles: string[] = [".pnp.js", "package.json"];
+
 async function main(workspacePath: string) {
   const stream: WriteStream = createWriteStream("./defs.bzl");
-
   stream.write("def pinned_yarn_install():\n");
-  const contents = `package(default_visibility = ["//visibility:public"])
-exports_files([
-    ".pnp.js",
-    "package.json",
-])`;
   const yarnLock = await fsp.readFile(
     path.join(workspacePath, "yarn.lock"),
     "utf-8"
@@ -213,11 +224,13 @@ exports_files([
         Object.keys(packageNameJson[d] || {}).map((packageName: string) =>
           processPackage(packageName, metadata, stream)
         )
-        .concat([writeFile("BUILD.bazel", contents)])
       );
     })
   );
-  stream.close()
+  stream.close();
+  const contents = `package(default_visibility = ["//visibility:public"])
+  exports_files([ \n${sourceFiles.map(a => `${a},`).join("\n")}\n])`;
+  writeFile("BUILD.bazel", contents);
 }
 
 main(process.argv[2]);

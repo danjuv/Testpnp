@@ -34,3 +34,6 @@ yarn_install(
   yarn_lock = "//pnp:yarn.lock",
   symlink_node_modules = False,
 )
+
+load("@npm_pnp//:defs.bzl", "pinned_yarn_install")
+pinned_yarn_install()

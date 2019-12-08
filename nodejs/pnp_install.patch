@@ -81,10 +81,10 @@ index 7272a62..dbd4bae 100644
  done
 diff --git internal/npm_install/generate_pnp_build_files.js internal/npm_install/generate_pnp_build_files.js
 new file mode 100644
-index 0000000..9d87299
+index 0000000..59695c3
 --- /dev/null
 +++ internal/npm_install/generate_pnp_build_files.js
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,183 @@
 +"use strict";
 +var __importStar = (this && this.__importStar) || function (mod) {
 +    if (mod && mod.__esModule) return mod;
@@ -154,15 +154,18 @@ index 0000000..9d87299
 +        // is the same regardless of platform
 +        .sort();
 +}
-+function addPackageToDefs(pkg, location, stream) {
++function addPackageToDefs(packageName, location, stream) {
++    const sources = listFiles(location);
 +    stream.write(`  native.new_local_repository(
-+    name = "${pkg.replace(/-/g, "_")}",
++    name = "${packageName.replace(/-/g, "_")}",
 +    path = "${location}",
 +    build_file_content = """package(default_visibility = ["//visibility:public"])
 +filegroup(
-+name = "${pkg}_files",
-+srcs = glob(["*"])
-+)
++name = "${packageName}_files",
++srcs = [
++  ${sources.map((f) => `"${f}",`).join('\n')}
++]
++
 +""",
 +)\n`);
 +}
